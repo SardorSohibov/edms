@@ -2,37 +2,55 @@ import { supabase, Profile, Document, DocumentAnalysis, DashboardStats, SystemLo
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
 
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8081';
+const AUTH_PROFILE_KEY = 'smartdoc-auth-profile';
+const AUTH_TOKEN_KEY = 'smartdoc-auth-token';
+const AUTH_REFRESH_TOKEN_KEY = 'smartdoc-auth-refresh-token';
+
 export async function login(email: string, password: string) {
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) throw new Error(error.message);
+  const response = await fetch(`${BACKEND_URL}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
 
-  const { data: profile, error: profileError } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', data.user.id)
-    .maybeSingle();
+  const result = await response.json();
+  if (!response.ok || !result?.success) {
+    throw new Error(result?.message || 'Invalid login credentials');
+  }
 
-  if (profileError || !profile) throw new Error('Profile not found. Contact your administrator.');
-  if (!profile.is_active) throw new Error('Your account has been deactivated. Contact your administrator.');
+  const profile = result.user as Profile;
+  if (!profile?.is_active) {
+    throw new Error('Your account has been deactivated');
+  }
 
-  return { user: data.user, profile, session: data.session };
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(AUTH_PROFILE_KEY, JSON.stringify(profile));
+    if (result.token) localStorage.setItem(AUTH_TOKEN_KEY, result.token);
+    if (result.refreshToken) localStorage.setItem(AUTH_REFRESH_TOKEN_KEY, result.refreshToken);
+  }
+
+  return { profile, token: result.token, refreshToken: result.refreshToken };
 }
 
 export async function logout() {
-  await supabase.auth.signOut();
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem(AUTH_PROFILE_KEY);
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    localStorage.removeItem(AUTH_REFRESH_TOKEN_KEY);
+  }
 }
 
 export async function getCurrentProfile(): Promise<Profile | null> {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return null;
+  if (typeof window === 'undefined') return null;
+  const raw = localStorage.getItem(AUTH_PROFILE_KEY);
+  if (!raw) return null;
 
-  const { data } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', user.id)
-    .maybeSingle();
-
-  return data;
+  try {
+    return JSON.parse(raw) as Profile;
+  } catch {
+    return null;
+  }
 }
 
 // ─── Users ───────────────────────────────────────────────────────────────────
@@ -117,6 +135,7 @@ export async function createDocument(payload: {
   description: string;
   content: string;
   department: string;
+  file_url?: string;
 }): Promise<Document> {
   const { data: { user } } = await supabase.auth.getUser();
 

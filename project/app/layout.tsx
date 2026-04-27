@@ -6,10 +6,10 @@ import { Providers } from '@/components/providers';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'EDMS Pro — Electronic Document Management System',
+  title: 'SmartDoc — Electronic Document Management System',
   description: 'Enterprise-grade document management with AI-powered analysis, e-signatures, and role-based access control.',
   openGraph: {
-    title: 'EDMS Pro',
+    title: 'SmartDoc',
     description: 'AI-Powered Electronic Document Management System',
     images: [{ url: 'https://bolt.new/static/og_default.png' }],
   },

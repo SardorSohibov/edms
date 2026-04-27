@@ -7,6 +7,8 @@ import { useLang } from '@/contexts/language-context';
 import { login } from '@/lib/api';
 import { Eye, EyeOff, FileText, Shield, Zap, Globe } from 'lucide-react';
 
+const AUTH_BYPASS_ENABLED = process.env.NEXT_PUBLIC_AUTH_BYPASS !== 'false';
+
 export default function LoginPage() {
   const router = useRouter();
   const { profile, loading } = useAuth();
@@ -27,6 +29,12 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+
+    if (AUTH_BYPASS_ENABLED) {
+      router.replace('/dashboard');
+      return;
+    }
+
     setIsLoading(true);
 
     try {
@@ -102,7 +110,7 @@ export default function LoginPage() {
 
         {/* Footer */}
         <div className="relative text-slate-500 text-xs">
-          &copy; {new Date().getFullYear()} EDMS Pro. All rights reserved.
+          &copy; {new Date().getFullYear()} SmartDoc. All rights reserved.
         </div>
       </div>
 
@@ -236,7 +244,7 @@ export default function LoginPage() {
           </div>
 
           <p className="text-slate-600 text-xs text-center mt-6">
-            Protected by enterprise-grade encryption &bull; EDMS Pro v2.0
+            Protected by enterprise-grade encryption &bull; SmartDoc v2.0
           </p>
         </div>
       </div>

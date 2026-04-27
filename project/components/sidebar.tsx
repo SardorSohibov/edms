@@ -60,7 +60,7 @@ export function Sidebar() {
         </div>
         {!collapsed && (
           <div className="overflow-hidden">
-            <div className="text-white font-bold text-base tracking-tight whitespace-nowrap">EDMS Pro</div>
+            <div className="text-white font-bold text-base tracking-tight whitespace-nowrap">SmartDoc</div>
             <div className="text-slate-500 text-[10px] whitespace-nowrap">Document Management</div>
           </div>
         )}

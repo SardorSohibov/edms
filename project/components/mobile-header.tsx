@@ -47,7 +47,7 @@ export function MobileHeader() {
           <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-600/30">
             <FileText className="w-3.5 h-3.5 text-white" />
           </div>
-          <span className="text-white font-bold text-base">EDMS Pro</span>
+          <span className="text-white font-bold text-base">SmartDoc</span>
         </div>
 
         <div className="flex items-center gap-2">
@@ -86,7 +86,7 @@ export function MobileHeader() {
             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
               <FileText className="w-4 h-4 text-white" />
             </div>
-            <span className="text-white font-bold">EDMS Pro</span>
+            <span className="text-white font-bold">SmartDoc</span>
           </div>
           <button onClick={() => setOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800">
             <X className="w-5 h-5" />

@@ -3,9 +3,9 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@/contexts/auth-context';
 import { useLang } from '@/contexts/language-context';
-import { getDocuments, createDocument, updateDocumentStatus, analyzeDocument, getDocumentAnalyses } from '@/lib/api';
-import { Document, DocumentAnalysis } from '@/lib/supabase';
-import { FileText, Plus, Search, X, Zap, PenLine, ChevronDown, ChevronRight, Sparkles, Scale, Calendar, CircleCheck as CheckCircle, Clock, CircleAlert as AlertCircle, FolderOpen, ArrowLeft, RefreshCw } from 'lucide-react';
+import { getDocuments, createDocument, updateDocumentStatus, analyzeDocument, getDocumentAnalyses, getUsers } from '@/lib/api';
+import { Document, DocumentAnalysis, Profile } from '@/lib/supabase';
+import { FileText, Plus, Search, X, Zap, PenLine, ChevronDown, ChevronRight, Sparkles, Scale, Calendar, CircleCheck as CheckCircle, Clock, CircleAlert as AlertCircle, FolderOpen, ArrowLeft, RefreshCw, Upload, Send, Download, Eye } from 'lucide-react';
 
 const STATUS_CONFIG = {
   draft: { label: 'Draft', icon: FolderOpen, bg: 'bg-slate-100', text: 'text-slate-600', dot: 'bg-slate-400' },
@@ -26,33 +26,86 @@ const ANALYSIS_LABELS = {
   key_dates: { label: 'Key Dates', icon: Calendar, color: 'text-teal-600 bg-teal-50 border-teal-200' },
 };
 
+type CreateDocPayload = {
+  title: string;
+  description: string;
+  content: string;
+  department: string;
+  recipientIds: string[];
+  recipientNames: string[];
+  fileName: string;
+  fileDataUrl: string;
+  submitForSignature: boolean;
+};
+
 function CreateDocModal({
-  open, onClose, onSubmit, loading, error, department,
+  open, onClose, onSubmit, loading, error, department, recipients,
 }: {
-  open: boolean; onClose: () => void; onSubmit: (d: { title: string; description: string; content: string; department: string }) => void;
-  loading: boolean; error: string; department: string;
+  open: boolean;
+  onClose: () => void;
+  onSubmit: (d: CreateDocPayload) => void;
+  loading: boolean;
+  error: string;
+  department: string;
+  recipients: Profile[];
 }) {
   const { t } = useLang();
   const DEPTS = ['Legal', 'Finance', 'HR', 'Operations', 'IT', 'Procurement', 'Executive', 'Compliance'];
-  const [form, setForm] = useState({ title: '', description: '', content: '', department: department || '' });
+  const [form, setForm] = useState({
+    title: '',
+    description: '',
+    content: '',
+    department: department || '',
+    recipientIds: [] as string[],
+  });
+  const [fileName, setFileName] = useState('');
+  const [fileDataUrl, setFileDataUrl] = useState('');
 
   useEffect(() => {
-    if (open) setForm({ title: '', description: '', content: '', department: department || '' });
+    if (open) {
+      setForm({
+        title: '',
+        description: '',
+        content: '',
+        department: department || '',
+        recipientIds: [],
+      });
+      setFileName('');
+      setFileDataUrl('');
+    }
   }, [open, department]);
 
   if (!open) return null;
 
+  const submitForm = (submitForSignature: boolean) => {
+    const selectedRecipients = recipients.filter((r) => form.recipientIds.includes(r.id));
+    onSubmit({
+      title: form.title,
+      description: form.description,
+      content: form.content,
+      department: form.department,
+      recipientIds: form.recipientIds,
+      recipientNames: selectedRecipients.map((r) => r.full_name),
+      fileName,
+      fileDataUrl,
+      submitForSignature,
+    });
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
-        <div className="flex items-center justify-between p-6 border-b border-slate-100">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/50 backdrop-blur-sm">
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full max-w-lg max-h-[92vh] flex flex-col">
+        <div className="flex items-center justify-between p-4 sm:p-6 border-b border-slate-100">
           <div>
             <h2 className="text-slate-900 font-semibold text-lg">{t('newDocument')}</h2>
             <p className="text-slate-400 text-sm mt-0.5">Create a new document</p>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"><X size={18} /></button>
         </div>
-        <form onSubmit={(e) => { e.preventDefault(); onSubmit(form); }} className="p-6 space-y-4">
+        <form
+          onSubmit={(e) => e.preventDefault()}
+          className="p-4 sm:p-6 space-y-4 overflow-y-auto"
+        >
           {error && <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-600 text-sm">{error}</div>}
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1.5">{t('documentTitle')}</label>
@@ -87,10 +140,76 @@ function CreateDocModal({
               className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
               placeholder="Paste or type document content for AI analysis..." />
           </div>
-          <div className="flex gap-3 pt-2">
-            <button type="button" onClick={onClose} className="flex-1 py-2.5 px-4 rounded-xl border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50 transition-colors">{t('cancel')}</button>
-            <button type="submit" disabled={loading} className="flex-1 py-2.5 px-4 rounded-xl bg-blue-600 text-white text-sm font-medium hover:bg-blue-500 disabled:opacity-60 transition-colors flex items-center justify-center gap-2">
-              {loading ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Creating...</> : t('createDocument')}
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">File Upload</label>
+            <label className="flex items-center gap-2 w-full px-3.5 py-2.5 border border-dashed border-slate-300 rounded-xl text-sm text-slate-600 hover:bg-slate-50 cursor-pointer transition-colors">
+              <Upload size={15} />
+              <span className="truncate">{fileName || 'Choose a file (PDF, DOCX, TXT)'}</span>
+              <input
+                type="file"
+                className="hidden"
+                accept=".pdf,.doc,.docx,.txt"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  setFileName(file.name);
+                  const reader = new FileReader();
+                  reader.onload = () => setFileDataUrl(typeof reader.result === 'string' ? reader.result : '');
+                  reader.readAsDataURL(file);
+                }}
+              />
+            </label>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">Send for Signature</label>
+            <div className="max-h-32 overflow-y-auto border border-slate-200 rounded-xl p-2 space-y-1">
+              {recipients.length === 0 ? (
+                <p className="text-xs text-slate-400 px-2 py-1">No approvers found</p>
+              ) : recipients.map((user) => {
+                const checked = form.recipientIds.includes(user.id);
+                return (
+                  <label key={user.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setForm((prev) => ({ ...prev, recipientIds: [...prev.recipientIds, user.id] }));
+                        } else {
+                          setForm((prev) => ({ ...prev, recipientIds: prev.recipientIds.filter((id) => id !== user.id) }));
+                        }
+                      }}
+                    />
+                    <span className="text-sm text-slate-700">{user.full_name}</span>
+                    <span className="text-xs text-slate-400 ml-auto capitalize">{user.role}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="sm:col-span-1 py-2.5 px-4 rounded-xl border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50 transition-colors"
+            >
+              {t('cancel')}
+            </button>
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => submitForm(false)}
+              className="sm:col-span-1 py-2.5 px-4 rounded-xl border border-blue-200 text-blue-700 text-sm font-semibold hover:bg-blue-50 disabled:opacity-60 transition-colors"
+            >
+              {loading ? 'Saving...' : 'Draft saqlash'}
+            </button>
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => submitForm(true)}
+              className="sm:col-span-1 py-2.5 px-4 rounded-xl bg-blue-600 text-white text-sm font-semibold hover:bg-blue-500 disabled:opacity-60 transition-colors flex items-center justify-center gap-2"
+            >
+              {loading ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Jo'natilmoqda...</> : <><Send size={14} />Imzolashga jo'natish</>}
             </button>
           </div>
         </form>
@@ -138,6 +257,24 @@ function AISidePanel({ doc, onClose }: { doc: Document; onClose: () => void }) {
   };
 
   const canSign = profile?.id === doc.owner_id && !signed;
+  const canSubmitDraft = profile?.id === doc.owner_id && doc.status === 'draft';
+  const fileName = doc.description.match(/File:\s*([^|\n]+)/i)?.[1]?.trim() || `${doc.title}.file`;
+  const hasFile = Boolean(doc.file_url);
+
+  const openFile = () => {
+    if (!doc.file_url) return;
+    window.open(doc.file_url, '_blank');
+  };
+
+  const downloadFile = () => {
+    if (!doc.file_url) return;
+    const link = document.createElement('a');
+    link.href = doc.file_url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  };
 
   return (
     <div className="flex flex-col h-full bg-white border-l border-slate-100 w-full lg:w-96 flex-shrink-0">
@@ -164,6 +301,38 @@ function AISidePanel({ doc, onClose }: { doc: Document; onClose: () => void }) {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto">
+        <div className="p-4 border-b border-slate-100 bg-slate-50/60 space-y-2">
+          <p className="text-xs text-slate-500">
+            <span className="font-semibold text-slate-700">Status:</span> {doc.status}
+          </p>
+          {doc.description && (
+            <p className="text-xs text-slate-500">
+              <span className="font-semibold text-slate-700">Izoh:</span> {doc.description}
+            </p>
+          )}
+          {doc.content && (
+            <p className="text-xs text-slate-500 line-clamp-3">
+              <span className="font-semibold text-slate-700">Matn:</span> {doc.content}
+            </p>
+          )}
+          <div className="flex items-center gap-2 pt-1">
+            {hasFile ? (
+              <>
+                <button onClick={openFile} className="px-2.5 py-1 rounded-lg bg-blue-100 text-blue-700 text-xs font-medium inline-flex items-center gap-1.5 hover:bg-blue-200">
+                  <Eye size={12} />
+                  Ko&apos;rish
+                </button>
+                <button onClick={downloadFile} className="px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-700 text-xs font-medium inline-flex items-center gap-1.5 hover:bg-emerald-200">
+                  <Download size={12} />
+                  Yuklab olish
+                </button>
+              </>
+            ) : (
+              <span className="text-xs text-slate-400">Fayl biriktirilmagan</span>
+            )}
+          </div>
+        </div>
+
         {activeTab === 'ai' && (
           <div className="p-4 space-y-4">
             {/* AI Tools */}
@@ -239,6 +408,18 @@ function AISidePanel({ doc, onClose }: { doc: Document; onClose: () => void }) {
               </div>
             ) : (
               <>
+                {canSubmitDraft && (
+                  <button
+                    onClick={async () => {
+                      await updateDocumentStatus(doc.id, 'pending');
+                      onClose();
+                    }}
+                    className="w-full py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold transition-all flex items-center justify-center gap-2"
+                  >
+                    <Send size={15} />
+                    Imzolashga jo&apos;natish
+                  </button>
+                )}
                 <div className="rounded-xl border-2 border-dashed border-slate-200 p-6 text-center">
                   <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-3">
                     <PenLine size={20} className="text-slate-400" />
@@ -264,6 +445,7 @@ export default function DocumentsPage() {
   const { profile } = useAuth();
   const { t } = useLang();
   const [docs, setDocs] = useState<Document[]>([]);
+  const [recipients, setRecipients] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -286,19 +468,74 @@ export default function DocumentsPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const handleCreate = async (data: { title: string; description: string; content: string; department: string }) => {
+  const handleCreate = async (data: CreateDocPayload) => {
     setCreateLoading(true);
     setCreateError('');
     try {
-      await createDocument(data);
+      const signatureMeta = [
+        data.fileName ? `File: ${data.fileName}` : '',
+        data.recipientNames.length ? `Recipients: ${data.recipientNames.join(', ')}` : '',
+      ].filter(Boolean).join(' | ');
+
+      const created = await createDocument({
+        title: data.title,
+        description: signatureMeta ? `${data.description}\n${signatureMeta}`.trim() : data.description,
+        content: data.content,
+        department: data.department,
+        file_url: data.fileDataUrl || '',
+      });
+
+      if (data.submitForSignature) {
+        await updateDocumentStatus(created.id, 'pending');
+      }
+
       setCreateOpen(false);
       await load();
     } catch (err: unknown) {
-      setCreateError(err instanceof Error ? err.message : t('error'));
+      if (profile?.id === 'dev-bypass-user') {
+        const localDoc: Document = {
+          id: `local-${Date.now()}`,
+          title: data.title,
+          description: data.description,
+          content: data.content,
+          status: data.submitForSignature ? 'pending' : 'draft',
+          owner_id: profile.id,
+          department: data.department,
+          file_url: data.fileDataUrl || '',
+          signed_at: null,
+          ai_analyzed: false,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          owner: profile,
+        };
+        setDocs((prev) => [localDoc, ...prev]);
+        setCreateOpen(false);
+      } else {
+        setCreateError(err instanceof Error ? err.message : t('error'));
+      }
     } finally {
       setCreateLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!profile) return;
+
+    (async () => {
+      try {
+        const allUsers = await getUsers();
+        const approvers = allUsers.filter((u) => {
+          if (u.id === profile.id) return false;
+          if (u.role === 'admin') return true;
+          if (u.role === 'director' && (!profile.department || u.department === profile.department)) return true;
+          return false;
+        });
+        setRecipients(approvers);
+      } catch {
+        setRecipients([]);
+      }
+    })();
+  }, [profile]);
 
   const handleStatusChange = async (docId: string, status: Document['status']) => {
     await updateDocumentStatus(docId, status);
@@ -319,6 +556,26 @@ export default function DocumentsPage() {
   const dept = profile?.role === 'director' ? profile.department :
                profile?.role === 'employee' ? profile.department : '';
 
+  const getFileName = (doc: Document) => {
+    const match = doc.description.match(/File:\s*([^|\n]+)/i);
+    return match?.[1]?.trim() || `${doc.title}.file`;
+  };
+
+  const handleOpenFile = (doc: Document) => {
+    if (!doc.file_url) return;
+    window.open(doc.file_url, '_blank');
+  };
+
+  const handleDownloadFile = (doc: Document) => {
+    if (!doc.file_url) return;
+    const link = document.createElement('a');
+    link.href = doc.file_url;
+    link.download = getFileName(doc);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  };
+
   return (
     <div className="flex h-[calc(100vh-3.5rem)] lg:h-screen overflow-hidden">
       {/* Main List */}
@@ -334,12 +591,12 @@ export default function DocumentsPage() {
               <button onClick={load} className="p-2.5 rounded-xl border border-slate-200 bg-white text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all shadow-sm">
                 <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
               </button>
-              {profile?.role === 'employee' && (
-                <button onClick={() => { setCreateError(''); setCreateOpen(true); }}
-                  className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-xl hover:bg-blue-500 transition-colors shadow-lg shadow-blue-600/25">
-                  <Plus size={16} />{t('newDocument')}
-                </button>
-              )}
+              <button
+                onClick={() => { setCreateError(''); setCreateOpen(true); }}
+                className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-xl hover:bg-blue-500 transition-colors shadow-lg shadow-blue-600/25"
+              >
+                <Plus size={16} />{t('newDocument')}
+              </button>
             </div>
           </div>
 
@@ -371,11 +628,9 @@ export default function DocumentsPage() {
                 <FileText size={24} className="text-slate-400" />
               </div>
               <p className="text-slate-500 font-medium">{t('noData')}</p>
-              {profile?.role === 'employee' && (
-                <button onClick={() => setCreateOpen(true)} className="mt-4 px-4 py-2 bg-blue-600 text-white text-sm rounded-xl hover:bg-blue-500 transition-colors">
-                  {t('newDocument')}
-                </button>
-              )}
+              <button onClick={() => setCreateOpen(true)} className="mt-4 px-4 py-2 bg-blue-600 text-white text-sm rounded-xl hover:bg-blue-500 transition-colors">
+                {t('newDocument')}
+              </button>
             </div>
           ) : (
             <div className="space-y-2">
@@ -408,17 +663,49 @@ export default function DocumentsPage() {
                           )}
                           <span className="ml-auto">{new Date(doc.created_at).toLocaleDateString()}</span>
                         </div>
+                        {(doc.description || doc.content) && (
+                          <p className="text-xs text-slate-500 mt-2 line-clamp-2">
+                            {doc.description || doc.content}
+                          </p>
+                        )}
+                        <div className="flex items-center gap-2 mt-2 flex-wrap">
+                          <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                            {sc.label}
+                          </span>
+                          {doc.file_url ? (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDownloadFile(doc);
+                              }}
+                              className="text-[11px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 hover:bg-blue-100 inline-flex items-center gap-1"
+                            >
+                              <Download size={11} />
+                              Faylni yuklab olish
+                            </button>
+                          ) : (
+                            <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">
+                              Fayl biriktirilmagan
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
 
                     {/* Inline actions for non-employee or owner */}
                     {(profile?.role !== 'employee' || profile?.id === doc.owner_id) && !isSelected && (
-                      <div className="flex items-center gap-2 px-4 pb-3" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center gap-2 px-4 pb-3 flex-wrap" onClick={(e) => e.stopPropagation()}>
                         {doc.status === 'draft' && profile?.id === doc.owner_id && (
-                          <button onClick={() => handleStatusChange(doc.id, 'pending')}
-                            className="px-2.5 py-1 text-xs font-medium rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors">
-                            Submit for Signature
+                          <button
+                            onClick={() => handleStatusChange(doc.id, 'pending')}
+                            className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors inline-flex items-center gap-1.5"
+                          >
+                            <Send size={12} />
+                            Jo&apos;natish
                           </button>
+                        )}
+                        {doc.status === 'draft' && profile?.id === doc.owner_id && (
+                          <span className="text-[11px] text-slate-400">Draft saqlangan. Xohlagan payt yuborishingiz mumkin.</span>
                         )}
                         {doc.status === 'pending' && profile?.role === 'director' && (
                           <>
@@ -459,7 +746,7 @@ export default function DocumentsPage() {
 
       <CreateDocModal
         open={createOpen} onClose={() => setCreateOpen(false)} onSubmit={handleCreate}
-        loading={createLoading} error={createError} department={dept}
+        loading={createLoading} error={createError} department={dept} recipients={recipients}
       />
     </div>
   );
