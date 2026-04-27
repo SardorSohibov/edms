@@ -10,9 +10,9 @@ export const translations = {
     signIn: 'Sign In',
     signingIn: 'Signing in...',
     loginTitle: 'Welcome Back',
-    loginSubtitle: 'Sign in to your EDMS account',
+    loginSubtitle: 'Sign in to your SmartDoc account',
     invalidCredentials: 'Invalid email or password',
-    systemName: 'EDMS Pro',
+    systemName: 'SmartDoc',
     systemTagline: 'Electronic Document Management System',
 
     // Navigation
@@ -117,9 +117,9 @@ export const translations = {
     signIn: 'Kirish',
     signingIn: 'Kirilmoqda...',
     loginTitle: 'Xush kelibsiz',
-    loginSubtitle: 'EDMS hisobingizga kiring',
+    loginSubtitle: 'SmartDoc hisobingizga kiring',
     invalidCredentials: 'Noto\'g\'ri email yoki parol',
-    systemName: 'EDMS Pro',
+    systemName: 'SmartDoc',
     systemTagline: 'Elektron hujjat boshqaruv tizimi',
 
     // Navigation
