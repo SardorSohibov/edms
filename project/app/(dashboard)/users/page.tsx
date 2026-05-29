@@ -5,12 +5,11 @@ import { useAuth } from '@/contexts/auth-context';
 import { useLang } from '@/contexts/language-context';
 import { getUsers, createUser, updateUser } from '@/lib/api';
 import { Profile } from '@/lib/supabase';
+import { useDepartments } from '@/hooks/use-departments';
 import {
   Users, Plus, Search, Pencil, UserCheck, UserX,
   X, Shield, Briefcase, User, ChevronDown,
 } from 'lucide-react';
-
-const DEPARTMENTS = ['Legal', 'Finance', 'HR', 'Operations', 'IT', 'Procurement', 'Executive', 'Compliance'];
 
 const roleStyles = {
   admin: { bg: 'bg-amber-100', text: 'text-amber-700', icon: Shield },
@@ -33,24 +32,35 @@ interface EditFormData {
 }
 
 function UserModal({
-  open, onClose, onSubmit, callerRole, callerDept, loading, error,
+  open, onClose, onSubmit, callerRole, callerDept, departments, departmentsLoading, loading, error,
 }: {
   open: boolean;
   onClose: () => void;
   onSubmit: (data: UserFormData) => void;
   callerRole: string;
   callerDept: string;
+  departments: string[];
+  departmentsLoading: boolean;
   loading: boolean;
   error: string;
 }) {
   const { t } = useLang();
+  const defaultDepartment = callerDept || departments[0] || '';
   const [form, setForm] = useState<UserFormData>({
-    full_name: '', email: '', password: '', role: callerRole === 'admin' ? 'director' : 'employee', department: callerDept,
+    full_name: '', email: '', password: '', role: callerRole === 'admin' ? 'director' : 'employee', department: defaultDepartment,
   });
 
   useEffect(() => {
-    if (open) setForm({ full_name: '', email: '', password: '', role: callerRole === 'admin' ? 'director' : 'employee', department: callerDept });
-  }, [open, callerRole, callerDept]);
+    if (open) {
+      setForm({
+        full_name: '',
+        email: '',
+        password: '',
+        role: callerRole === 'admin' ? 'director' : 'employee',
+        department: callerDept || departments[0] || '',
+      });
+    }
+  }, [open, callerRole, callerDept, departments]);
 
   if (!open) return null;
 
@@ -59,7 +69,7 @@ function UserModal({
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
         <div className="flex items-center justify-between p-6 border-b border-slate-100">
           <div>
-            <h2 className="text-slate-900 font-semibold text-lg">{t('createUser')}</h2>
+            <h2 className="text-slate-900 font-semibold text-lg">{callerRole === 'admin' ? t('createDirector') : t('createUser')}</h2>
             <p className="text-slate-400 text-sm mt-0.5">Fill in the details below</p>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors">
@@ -118,23 +128,21 @@ function UserModal({
 
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1.5">{t('department')}</label>
-            {callerRole === 'director' ? (
-              <input
-                value={callerDept} disabled
-                className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-500 bg-slate-50"
-              />
-            ) : (
-              <div className="relative">
-                <select
-                  value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })}
-                  className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none bg-white"
-                >
-                  <option value="">Select department</option>
-                  {DEPARTMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
-                </select>
-                <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-              </div>
-            )}
+            <div className="relative">
+              <select
+                required
+                value={form.department}
+                onChange={(e) => setForm({ ...form, department: e.target.value })}
+                disabled={departmentsLoading || departments.length === 0}
+                className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none bg-white disabled:bg-slate-50 disabled:text-slate-400"
+              >
+                <option value="">
+                  {departmentsLoading ? t('loading') : departments.length === 0 ? t('noData') : t('department')}
+                </option>
+                {departments.map((d) => <option key={d} value={d}>{d}</option>)}
+              </select>
+              <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            </div>
           </div>
 
           <div className="flex gap-3 pt-2">
@@ -144,7 +152,7 @@ function UserModal({
             <button type="submit" disabled={loading} className="flex-1 py-2.5 px-4 rounded-xl bg-blue-600 text-white text-sm font-medium hover:bg-blue-500 disabled:opacity-60 transition-colors flex items-center justify-center gap-2">
               {loading ? (
                 <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />{t('creating')}</>
-              ) : t('createUser')}
+              ) : callerRole === 'admin' ? t('createDirector') : t('createUser')}
             </button>
           </div>
         </form>
@@ -154,12 +162,14 @@ function UserModal({
 }
 
 function EditModal({
-  user, open, onClose, onSubmit, loading, error,
+  user, open, onClose, onSubmit, departments, departmentsLoading, loading, error,
 }: {
   user: Profile | null;
   open: boolean;
   onClose: () => void;
   onSubmit: (data: EditFormData) => void;
+  departments: string[];
+  departmentsLoading: boolean;
   loading: boolean;
   error: string;
 }) {
@@ -196,11 +206,15 @@ function EditModal({
             <label className="block text-sm font-medium text-slate-700 mb-1.5">{t('department')}</label>
             <div className="relative">
               <select
-                value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })}
-                className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none bg-white"
+                value={form.department}
+                onChange={(e) => setForm({ ...form, department: e.target.value })}
+                disabled={departmentsLoading || departments.length === 0}
+                className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none bg-white disabled:bg-slate-50 disabled:text-slate-400"
               >
-                <option value="">No department</option>
-                {DEPARTMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
+                <option value="">
+                  {departmentsLoading ? t('loading') : departments.length === 0 ? t('noData') : t('department')}
+                </option>
+                {departments.map((d) => <option key={d} value={d}>{d}</option>)}
               </select>
               <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
             </div>
@@ -243,6 +257,7 @@ export default function UsersPage() {
   const [editUser, setEditUser] = useState<Profile | null>(null);
   const [formLoading, setFormLoading] = useState(false);
   const [formError, setFormError] = useState('');
+  const { departmentNames, loading: departmentsLoading } = useDepartments(!!profile);
 
   const targetRole = profile?.role === 'admin' ? 'director' : 'employee';
   const targetDept = profile?.role === 'director' ? profile.department : undefined;
@@ -302,7 +317,7 @@ export default function UsersPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">{title}</h1>
           <p className="text-slate-400 text-sm mt-1">
-            {filtered.length} {t('users').toLowerCase()} total
+            {filtered.length} {t('employees').toLowerCase()} total
           </p>
         </div>
         <button
@@ -310,7 +325,7 @@ export default function UsersPage() {
           className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-xl hover:bg-blue-500 transition-colors shadow-lg shadow-blue-600/25"
         >
           <Plus size={16} />
-          {t('createUser')}
+          {profile?.role === 'admin' ? t('createDirector') : t('createUser')}
         </button>
       </div>
 
@@ -410,10 +425,12 @@ export default function UsersPage() {
       <UserModal
         open={createOpen} onClose={() => setCreateOpen(false)} onSubmit={handleCreate}
         callerRole={profile?.role || 'admin'} callerDept={profile?.department || ''}
+        departments={departmentNames} departmentsLoading={departmentsLoading}
         loading={formLoading} error={formError}
       />
       <EditModal
         user={editUser} open={!!editUser} onClose={() => setEditUser(null)} onSubmit={handleEdit}
+        departments={departmentNames} departmentsLoading={departmentsLoading}
         loading={formLoading} error={formError}
       />
     </div>

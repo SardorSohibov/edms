@@ -7,11 +7,9 @@ import { useLang } from '@/contexts/language-context';
 import { login } from '@/lib/api';
 import { Eye, EyeOff, FileText, Shield, Zap, Globe } from 'lucide-react';
 
-const AUTH_BYPASS_ENABLED = process.env.NEXT_PUBLIC_AUTH_BYPASS !== 'false';
-
 export default function LoginPage() {
   const router = useRouter();
-  const { profile, loading } = useAuth();
+  const { profile, loading, refreshProfile } = useAuth();
   const { lang, setLang, t } = useLang();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -29,16 +27,11 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-
-    if (AUTH_BYPASS_ENABLED) {
-      router.replace('/dashboard');
-      return;
-    }
-
     setIsLoading(true);
 
     try {
       await login(email, password);
+      await refreshProfile(); // ← localStorage dan profile o'qib state yangilanadi
       router.replace('/dashboard');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : t('invalidCredentials'));

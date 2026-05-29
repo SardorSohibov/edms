@@ -6,7 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/auth-context';
 import { useLang } from '@/contexts/language-context';
 import {
-  FileText, LayoutDashboard, Users, ScrollText, LogOut,
+  FileText, LayoutDashboard, Users, Building2, ScrollText, LogOut,
   Globe, X, Menu, Shield, Briefcase, User,
 } from 'lucide-react';
 
@@ -14,6 +14,7 @@ const navItems = [
   { href: '/dashboard', icon: LayoutDashboard, labelKey: 'dashboard', roles: ['admin', 'director', 'employee'] },
   { href: '/dashboard/documents', icon: FileText, labelKey: 'documents', roles: ['admin', 'director', 'employee'] },
   { href: '/dashboard/users', icon: Users, labelKey: 'users', roles: ['admin', 'director'] },
+  { href: '/dashboard/departments', icon: Building2, labelKey: 'departments', roles: ['admin', 'director'] },
   { href: '/dashboard/logs', icon: ScrollText, labelKey: 'systemLogs', roles: ['admin'] },
 ];
 

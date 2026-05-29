@@ -1,11 +1,114 @@
-import { supabase, Profile, Document, DocumentAnalysis, DashboardStats, SystemLog } from './supabase';
-
-// ─── Auth ────────────────────────────────────────────────────────────────────
+import { Profile, Document, DocumentAnalysis, DashboardStats, SystemLog, Department } from './supabase';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8081';
 const AUTH_PROFILE_KEY = 'smartdoc-auth-profile';
 const AUTH_TOKEN_KEY = 'smartdoc-auth-token';
 const AUTH_REFRESH_TOKEN_KEY = 'smartdoc-auth-refresh-token';
+
+function getAuthHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (typeof window !== 'undefined') {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (token) headers.Authorization = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+async function backendRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const response = await fetch(`${BACKEND_URL}${path}`, {
+    ...options,
+    headers: {
+      ...getAuthHeaders(),
+      ...(options.headers as Record<string, string> | undefined),
+    },
+  });
+
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || result?.success === false) {
+    throw new Error(result?.message || result?.error || 'Request failed');
+  }
+
+  return (result.data !== undefined ? result.data : result) as T;
+}
+
+function buildQuery(params: Record<string, string | undefined>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value) search.set(key, value);
+  }
+  const qs = search.toString();
+  return qs ? `?${qs}` : '';
+}
+
+const DOCUMENT_STATUSES: Document['status'][] = ['draft', 'pending', 'signed', 'rejected'];
+
+function normalizeDocumentStatus(status: unknown): Document['status'] {
+  if (status == null) return 'draft';
+
+  let raw: string;
+  if (typeof status === 'object') {
+    const value = status as Record<string, unknown>;
+    raw = String(value.name ?? value.value ?? value.status ?? 'draft');
+  } else {
+    raw = String(status);
+  }
+
+  const normalized = raw.toLowerCase().trim();
+  if (DOCUMENT_STATUSES.includes(normalized as Document['status'])) {
+    return normalized as Document['status'];
+  }
+
+  const aliases: Record<string, Document['status']> = {
+    approved: 'signed',
+    in_progress: 'pending',
+    in_review: 'pending',
+    submitted: 'pending',
+    waiting: 'pending',
+    declined: 'rejected',
+  };
+
+  return aliases[normalized] ?? 'draft';
+}
+
+function normalizeDocument(raw: Record<string, unknown>): Document {
+  const owner = raw.owner as Record<string, unknown> | undefined;
+
+  return {
+    id: String(raw.id ?? ''),
+    title: String(raw.title ?? ''),
+    description: String(raw.description ?? ''),
+    content: String(raw.content ?? ''),
+    status: normalizeDocumentStatus(raw.status ?? raw.documentStatus ?? raw.document_status),
+    owner_id: String(raw.owner_id ?? raw.ownerId ?? ''),
+    department: String(raw.department ?? ''),
+    file_url: String(raw.file_url ?? raw.fileUrl ?? ''),
+    signed_at: (raw.signed_at ?? raw.signedAt ?? null) as string | null,
+    ai_analyzed: Boolean(raw.ai_analyzed ?? raw.aiAnalyzed),
+    created_at: String(raw.created_at ?? raw.createdAt ?? new Date().toISOString()),
+    updated_at: String(raw.updated_at ?? raw.updatedAt ?? new Date().toISOString()),
+    owner: owner
+      ? {
+          id: String(owner.id ?? ''),
+          full_name: String(owner.full_name ?? owner.fullName ?? ''),
+          email: String(owner.email ?? ''),
+          role: (String(owner.role ?? 'employee').toLowerCase() as Profile['role']),
+          department: String(owner.department ?? ''),
+          is_active: Boolean(owner.is_active ?? owner.isActive ?? true),
+          created_by: (owner.created_by ?? owner.createdBy ?? null) as string | null,
+          avatar_initials: String(owner.avatar_initials ?? owner.avatarInitials ?? ''),
+          created_at: String(owner.created_at ?? owner.createdAt ?? ''),
+          updated_at: String(owner.updated_at ?? owner.updatedAt ?? ''),
+        }
+      : undefined,
+  };
+}
+
+function normalizeDocuments(data: unknown): Document[] {
+  if (!Array.isArray(data)) return [];
+  return data.map((item) => normalizeDocument(item as Record<string, unknown>));
+}
+
+// ─── Auth ────────────────────────────────────────────────────────────────────
 
 export async function login(email: string, password: string) {
   const response = await fetch(`${BACKEND_URL}/api/auth/login`, {
@@ -56,14 +159,7 @@ export async function getCurrentProfile(): Promise<Profile | null> {
 // ─── Users ───────────────────────────────────────────────────────────────────
 
 export async function getUsers(role?: string, department?: string): Promise<Profile[]> {
-  let query = supabase.from('profiles').select('*').order('created_at', { ascending: false });
-
-  if (role) query = query.eq('role', role);
-  if (department) query = query.eq('department', department);
-
-  const { data, error } = await query;
-  if (error) throw new Error(error.message);
-  return data || [];
+  return backendRequest<Profile[]>(`/api/users${buildQuery({ role, department })}`);
 }
 
 export async function createUser(payload: {
@@ -73,61 +169,52 @@ export async function createUser(payload: {
   role: string;
   department: string;
 }): Promise<Profile> {
-  const { data: { session } } = await supabase.auth.getSession();
-
-  const response = await fetch(
-    `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/manage-users/create`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${session?.access_token}`,
-        Apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      },
-      body: JSON.stringify(payload),
-    }
-  );
-
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || 'Failed to create user');
-  return result.data;
+  return backendRequest<Profile>('/api/users', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }
 
-export async function updateUser(id: string, updates: Partial<Pick<Profile, 'full_name' | 'department' | 'is_active'>>): Promise<Profile> {
-  const { data: { session } } = await supabase.auth.getSession();
+export async function updateUser(
+  id: string,
+  updates: Partial<Pick<Profile, 'full_name' | 'department' | 'is_active'>>
+): Promise<Profile> {
+  return backendRequest<Profile>(`/api/users/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(updates),
+  });
+}
 
-  const response = await fetch(
-    `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/manage-users/update/${id}`,
-    {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${session?.access_token}`,
-        Apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      },
-      body: JSON.stringify(updates),
-    }
-  );
+function normalizeDepartment(raw: Record<string, unknown>): Department {
+  return {
+    id: String(raw.id ?? ''),
+    name: String(raw.name ?? ''),
+    document_count: Number(raw.document_count ?? raw.documentCount ?? 0),
+    created_at: raw.created_at ? String(raw.created_at) : raw.createdAt ? String(raw.createdAt) : undefined,
+  };
+}
 
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || 'Failed to update user');
-  return result.data;
+export async function getDepartments(): Promise<Department[]> {
+  const data = await backendRequest<unknown>('/api/departments');
+  if (!Array.isArray(data)) return [];
+  return data.map((item) => normalizeDepartment(item as Record<string, unknown>));
+}
+
+export async function createDepartment(name: string): Promise<Department> {
+  const data = await backendRequest<Record<string, unknown>>('/api/departments', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+  return normalizeDepartment(data);
 }
 
 // ─── Documents ───────────────────────────────────────────────────────────────
 
 export async function getDocuments(filters?: { status?: string; department?: string }): Promise<Document[]> {
-  let query = supabase
-    .from('documents')
-    .select('*, owner:profiles(id, full_name, email, role, department, avatar_initials)')
-    .order('created_at', { ascending: false });
-
-  if (filters?.status) query = query.eq('status', filters.status);
-  if (filters?.department) query = query.eq('department', filters.department);
-
-  const { data, error } = await query;
-  if (error) throw new Error(error.message);
-  return (data || []) as Document[];
+  const data = await backendRequest<unknown>(
+    `/api/documents${buildQuery({ status: filters?.status, department: filters?.department })}`
+  );
+  return normalizeDocuments(data);
 }
 
 export async function createDocument(payload: {
@@ -136,142 +223,58 @@ export async function createDocument(payload: {
   content: string;
   department: string;
   file_url?: string;
+  recipient_ids?: string[];
 }): Promise<Document> {
-  const { data: { user } } = await supabase.auth.getUser();
+  const data = await backendRequest<Record<string, unknown>>('/api/documents', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return normalizeDocument(data);
+}
 
-  const { data, error } = await supabase
-    .from('documents')
-    .insert({ ...payload, owner_id: user!.id, status: 'draft' })
-    .select('*, owner:profiles(id, full_name, email, role, department, avatar_initials)')
-    .single();
-
-  if (error) throw new Error(error.message);
-  return data as Document;
+export async function getDepartmentEmployees(department: string): Promise<Profile[]> {
+  return getUsers('employee', department);
 }
 
 export async function updateDocumentStatus(id: string, status: Document['status']): Promise<Document> {
-  const updates: Record<string, unknown> = { status };
-  if (status === 'signed') updates.signed_at = new Date().toISOString();
-
-  const { data, error } = await supabase
-    .from('documents')
-    .update(updates)
-    .eq('id', id)
-    .select('*, owner:profiles(id, full_name, email, role, department, avatar_initials)')
-    .single();
-
-  if (error) throw new Error(error.message);
-  return data as Document;
+  const data = await backendRequest<Record<string, unknown>>(`/api/documents/${id}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status }),
+  });
+  return normalizeDocument(data);
 }
 
 // ─── AI Analysis ─────────────────────────────────────────────────────────────
 
-const AI_RESPONSES: Record<string, (title: string) => string> = {
-  summary: (title) =>
-    `**Document Summary: "${title}"**\n\nThis document outlines the terms, conditions, and procedural requirements related to the subject matter. Key sections include introductory clauses, main obligations of each party, payment terms, and termination conditions.\n\n**Key Points:**\n- Effective date: Upon signature of all parties\n- Duration: 12 months with automatic renewal\n- Jurisdiction: Republic of Uzbekistan\n- Governing Law: Civil Code of Uzbekistan`,
-
-  legal_risk: (title) =>
-    `**Legal Risk Assessment: "${title}"**\n\n🔴 **High Risk:** Section 4.2 contains ambiguous liability clauses that may expose the organization to unlimited damages.\n\n🟡 **Medium Risk:** Intellectual property rights are not clearly defined in Article 7. Recommend explicit ownership clause.\n\n🟡 **Medium Risk:** Force majeure clause (Section 9) does not include pandemic or cyber-attack scenarios.\n\n🟢 **Low Risk:** Payment terms are standard and legally sound.\n\n**Recommendation:** Legal counsel review recommended before signing.`,
-
-  key_dates: (title) =>
-    `**Key Dates Extracted: "${title}"**\n\n📅 **Effective Date:** January 1, 2025\n📅 **First Review Period:** March 31, 2025\n📅 **Payment Due Date:** 15th of each month\n📅 **Contract Expiration:** December 31, 2025\n📅 **Notice Period for Termination:** 30 days prior to expiration\n📅 **Renewal Decision Deadline:** November 30, 2025\n\n⚠️ **Upcoming:** Contract renewal decision required by November 30, 2025.`,
-};
-
 export async function analyzeDocument(
   documentId: string,
-  documentTitle: string,
+  _documentTitle: string,
   analysisType: DocumentAnalysis['analysis_type']
 ): Promise<DocumentAnalysis> {
-  await new Promise((r) => setTimeout(r, 1800));
-
-  const result = AI_RESPONSES[analysisType](documentTitle);
-  const { data: { user } } = await supabase.auth.getUser();
-
-  const { data, error } = await supabase
-    .from('document_analyses')
-    .insert({ document_id: documentId, analysis_type: analysisType, result, created_by: user?.id })
-    .select()
-    .single();
-
-  if (error) throw new Error(error.message);
-
-  await supabase.from('documents').update({ ai_analyzed: true }).eq('id', documentId);
-
-  return data;
+  return backendRequest<DocumentAnalysis>(`/api/documents/${documentId}/analyses`, {
+    method: 'POST',
+    body: JSON.stringify({ analysis_type: analysisType }),
+  });
 }
 
 export async function getDocumentAnalyses(documentId: string): Promise<DocumentAnalysis[]> {
-  const { data, error } = await supabase
-    .from('document_analyses')
-    .select('*')
-    .eq('document_id', documentId)
-    .order('created_at', { ascending: false });
-
-  if (error) throw new Error(error.message);
-  return data || [];
+  return backendRequest<DocumentAnalysis[]>(`/api/documents/${documentId}/analyses`);
 }
 
 // ─── Stats ───────────────────────────────────────────────────────────────────
 
 export async function getStats(department?: string): Promise<DashboardStats> {
-  let query = supabase.from('documents').select('status');
-  if (department) query = query.eq('department', department);
-
-  const { data, error } = await query;
-  if (error) throw new Error(error.message);
-
-  const docs = data || [];
-  return {
-    total_documents: docs.length,
-    pending_signatures: docs.filter((d) => d.status === 'pending').length,
-    ai_analyzed: 0,
-    rejected: docs.filter((d) => d.status === 'rejected').length,
-    signed: docs.filter((d) => d.status === 'signed').length,
-    draft: docs.filter((d) => d.status === 'draft').length,
-  };
+  return backendRequest<DashboardStats>(`/api/stats${buildQuery({ department })}`);
 }
 
 export async function getSystemLogs(): Promise<SystemLog[]> {
-  const { data, error } = await supabase
-    .from('system_logs')
-    .select('*, user:profiles(id, full_name, email, role, avatar_initials)')
-    .order('created_at', { ascending: false })
-    .limit(100);
-
-  if (error) throw new Error(error.message);
-  return (data || []) as SystemLog[];
+  return backendRequest<SystemLog[]>('/api/logs');
 }
 
 // ─── Chart Data ──────────────────────────────────────────────────────────────
 
 export async function getMonthlyChartData(department?: string) {
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const now = new Date();
-
-  const result = [];
-  for (let i = 5; i >= 0; i--) {
-    const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const nextDate = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
-
-    let query = supabase
-      .from('documents')
-      .select('status')
-      .gte('created_at', date.toISOString())
-      .lt('created_at', nextDate.toISOString());
-
-    if (department) query = query.eq('department', department);
-
-    const { data } = await query;
-    const docs = data || [];
-
-    result.push({
-      month: months[date.getMonth()],
-      total: docs.length,
-      signed: docs.filter((d) => d.status === 'signed').length,
-      pending: docs.filter((d) => d.status === 'pending').length,
-      rejected: docs.filter((d) => d.status === 'rejected').length,
-    });
-  }
-
-  return result;
+  return backendRequest<
+    { month: string; total: number; signed: number; pending: number; rejected: number }[]
+  >(`/api/charts/monthly${buildQuery({ department })}`);
 }
