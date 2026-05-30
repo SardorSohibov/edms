@@ -100,6 +100,15 @@ export const translations = {
     eSignature: 'E-Signature',
     signDocument: 'Sign Document',
     signedOn: 'Signed on',
+    signers: 'Signers',
+    awaitingYourSignature: 'Awaiting your signature',
+    youHaveSigned: 'You have signed this document',
+    allSigned: 'All signers have signed',
+    signingProgress: 'Signing progress',
+    rejectDocument: 'Reject',
+    rejectionReason: 'Rejection reason (optional)',
+    onlySignersCanSign: 'Only assigned signers can sign this document',
+    pendingSignature: 'Pending',
 
     // Logs
     systemActivity: 'System Activity',
@@ -222,6 +231,15 @@ export const translations = {
     eSignature: 'Elektron imzo',
     signDocument: 'Hujjatni imzolash',
     signedOn: 'Imzolangan sana',
+    signers: 'Imzolovchilar',
+    awaitingYourSignature: 'Sizning imzongiz kutilmoqda',
+    youHaveSigned: 'Siz bu hujjatni imzoladingiz',
+    allSigned: 'Barcha imzolovchilar imzoladi',
+    signingProgress: 'Imzolash jarayoni',
+    rejectDocument: 'Rad etish',
+    rejectionReason: 'Rad etish sababi (ixtiyoriy)',
+    onlySignersCanSign: 'Faqat tayinlangan imzolovchilar imzolashi mumkin',
+    pendingSignature: 'Kutilmoqda',
 
     // Logs
     systemActivity: 'Tizim faoliyati',

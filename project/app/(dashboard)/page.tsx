@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/auth-context';
 import { useLang } from '@/contexts/language-context';
-import { getStats, getMonthlyChartData, getDocuments } from '@/lib/api';
+import { getStats, getMonthlyChartData, getDocuments, computeStatsFromDocuments, computeMonthlyChartFromDocuments } from '@/lib/api';
 import { DashboardStats, Document } from '@/lib/supabase';
 import { StatsCards } from '@/components/stats-cards';
 import { DocumentFlowChart, StatusPieChart } from '@/components/document-chart';
@@ -35,19 +35,35 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!profile) return;
 
-    const dept = profile.role === 'director' ? profile.department : undefined;
+    const loadDashboard = async () => {
+      setLoading(true);
+      try {
+        if (profile.role === 'employee') {
+          const mine = await getDocuments({ owner_id: profile.id });
+          setStats(computeStatsFromDocuments(mine));
+          setChartData(computeMonthlyChartFromDocuments(mine));
+          setRecentDocs(mine.slice(0, 5));
+          return;
+        }
 
-    Promise.all([
-      getStats(dept),
-      getMonthlyChartData(dept),
-      getDocuments(dept ? { department: dept } : undefined),
-    ])
-      .then(([s, c, docs]) => {
+        const filters =
+          profile.role === 'director' ? { department: profile.department } : undefined;
+
+        const [s, c, docs] = await Promise.all([
+          getStats(filters),
+          getMonthlyChartData(filters),
+          getDocuments(filters),
+        ]);
+
         setStats(s);
         setChartData(c);
         setRecentDocs(docs.slice(0, 5));
-      })
-      .finally(() => setLoading(false));
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadDashboard();
   }, [profile]);
 
   if (loading || !profile) {
@@ -119,7 +135,7 @@ export default function DashboardPage() {
             <p className="text-slate-400 text-sm">Latest document updates</p>
           </div>
           <Link
-            href="/dashboard/documents"
+            href="/documents"
             className="flex items-center gap-1.5 text-blue-600 hover:text-blue-700 text-sm font-medium transition-colors"
           >
             View all <ArrowRight size={14} />

@@ -3,8 +3,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@/contexts/auth-context';
 import { useLang } from '@/contexts/language-context';
-import { getDocuments, createDocument, updateDocumentStatus, analyzeDocument, getDocumentAnalyses, getUsers, getDepartmentEmployees } from '@/lib/api';
-import { Document, DocumentAnalysis, Profile } from '@/lib/supabase';
+import { getAccessibleDocuments, createDocument, updateDocumentStatus, analyzeDocument, getDocumentAnalyses, getUsers, getDepartmentEmployees, getDocumentSigners, signDocument, rejectDocument, enrichDocumentSigners, isPendingSignerForUser } from '@/lib/api';
+import { Document, DocumentAnalysis, DocumentSigner, Profile } from '@/lib/supabase';
 import { useDepartments } from '@/hooks/use-departments';
 import { FileText, Plus, Search, X, Zap, PenLine, ChevronDown, ChevronRight, Sparkles, Scale, Calendar, CircleCheck as CheckCircle, Clock, CircleAlert as AlertCircle, FolderOpen, ArrowLeft, RefreshCw, Upload, Send, Download, Eye } from 'lucide-react';
 
@@ -310,21 +310,64 @@ function CreateDocModal({
   );
 }
 
-function AISidePanel({ doc, onClose }: { doc: Document; onClose: () => void }) {
+const SIGNER_STATUS_CONFIG = {
+  pending: { label: 'Pending', bg: 'bg-amber-100', text: 'text-amber-700', dot: 'bg-amber-500' },
+  signed: { label: 'Signed', bg: 'bg-emerald-100', text: 'text-emerald-700', dot: 'bg-emerald-500' },
+  rejected: { label: 'Rejected', bg: 'bg-red-100', text: 'text-red-700', dot: 'bg-red-500' },
+};
+
+function AISidePanel({
+  doc,
+  onClose,
+  onDocumentUpdate,
+}: {
+  doc: Document;
+  onClose: () => void;
+  onDocumentUpdate: (doc: Document) => void;
+}) {
   const { t } = useLang();
   const { profile } = useAuth();
   const [analyses, setAnalyses] = useState<DocumentAnalysis[]>([]);
+  const [signers, setSigners] = useState<DocumentSigner[]>(doc.signers ?? []);
   const [analyzing, setAnalyzing] = useState<string | null>(null);
   const [signing, setSigning] = useState(false);
-  const [signed, setSigned] = useState(doc.status === 'signed');
-  const [activeTab, setActiveTab] = useState<'ai' | 'sign'>('ai');
+  const [rejecting, setRejecting] = useState(false);
+  const [signError, setSignError] = useState('');
+  const [rejectReason, setRejectReason] = useState('');
+  const [docStatus, setDocStatus] = useState(doc.status);
+  const [activeTab, setActiveTab] = useState<'ai' | 'sign'>(doc.status === 'pending' ? 'sign' : 'ai');
 
   const loadAnalyses = useCallback(async () => {
     const data = await getDocumentAnalyses(doc.id);
     setAnalyses(data);
   }, [doc.id]);
 
+  const loadSigners = useCallback(async () => {
+    try {
+      const data = await getDocumentSigners(doc.id);
+      if (data.length > 0) {
+        setSigners(data);
+        return;
+      }
+    } catch {
+      // backend endpoint may not exist yet
+    }
+
+    if (doc.signers?.length) {
+      setSigners(doc.signers);
+      return;
+    }
+
+    const fallback = await enrichDocumentSigners(doc);
+    if (fallback.signers?.length) setSigners(fallback.signers);
+  }, [doc]);
+
   useEffect(() => { loadAnalyses(); }, [loadAnalyses]);
+  useEffect(() => { loadSigners(); }, [loadSigners]);
+  useEffect(() => {
+    setDocStatus(doc.status);
+    if (doc.signers?.length) setSigners(doc.signers);
+  }, [doc]);
 
   const handleAnalyze = async (type: DocumentAnalysis['analysis_type']) => {
     setAnalyzing(type);
@@ -340,16 +383,46 @@ function AISidePanel({ doc, onClose }: { doc: Document; onClose: () => void }) {
 
   const handleSign = async () => {
     setSigning(true);
+    setSignError('');
     try {
-      await updateDocumentStatus(doc.id, 'signed');
-      setSigned(true);
+      const result = await signDocument(doc.id);
+      setSigners((prev) =>
+        prev.map((s) => (s.user_id === profile?.id ? result.signer : s))
+      );
+      setDocStatus(result.document.status);
+      onDocumentUpdate(result.document);
+      await loadSigners();
+    } catch (err) {
+      setSignError(err instanceof Error ? err.message : t('error'));
     } finally {
       setSigning(false);
     }
   };
 
-  const canSign = profile?.id === doc.owner_id && !signed;
-  const canSubmitDraft = profile?.id === doc.owner_id && doc.status === 'draft';
+  const handleReject = async () => {
+    setRejecting(true);
+    setSignError('');
+    try {
+      const result = await rejectDocument(doc.id, rejectReason);
+      setSigners((prev) =>
+        prev.map((s) => (s.user_id === profile?.id ? result.signer : s))
+      );
+      setDocStatus(result.document.status);
+      onDocumentUpdate(result.document);
+      await loadSigners();
+    } catch (err) {
+      setSignError(err instanceof Error ? err.message : t('error'));
+    } finally {
+      setRejecting(false);
+    }
+  };
+
+  const mySigner = signers.find((s) => s.user_id === profile?.id);
+  const canSign = docStatus === 'pending' && mySigner?.status === 'pending';
+  const hasCurrentUserSigned = mySigner?.status === 'signed';
+  const isFullySigned = docStatus === 'signed';
+  const signedCount = signers.filter((s) => s.status === 'signed').length;
+  const canSubmitDraft = profile?.id === doc.owner_id && docStatus === 'draft';
   const fileName = doc.description.match(/File:\s*([^|\n]+)/i)?.[1]?.trim() || `${doc.title}.file`;
   const hasFile = Boolean(doc.file_url);
 
@@ -395,7 +468,7 @@ function AISidePanel({ doc, onClose }: { doc: Document; onClose: () => void }) {
       <div className="flex-1 overflow-y-auto">
         <div className="p-4 border-b border-slate-100 bg-slate-50/60 space-y-2">
           <p className="text-xs text-slate-500">
-            <span className="font-semibold text-slate-700">Status:</span> {doc.status}
+            <span className="font-semibold text-slate-700">Status:</span> {docStatus}
           </p>
           {doc.description && (
             <p className="text-xs text-slate-500">
@@ -484,7 +557,9 @@ function AISidePanel({ doc, onClose }: { doc: Document; onClose: () => void }) {
                 <div className="flex justify-between"><span>Document:</span><span className="font-medium text-slate-700 truncate max-w-40">{doc.title}</span></div>
                 <div className="flex justify-between"><span>Owner:</span><span className="font-medium text-slate-700">{doc.owner?.full_name}</span></div>
                 <div className="flex justify-between"><span>Status:</span>
-                  <span className={`font-medium capitalize ${signed ? 'text-emerald-600' : 'text-amber-600'}`}>{signed ? 'Signed' : doc.status}</span>
+                  <span className={`font-medium capitalize ${isFullySigned ? 'text-emerald-600' : docStatus === 'rejected' ? 'text-red-600' : 'text-amber-600'}`}>
+                    {docStatus}
+                  </span>
                 </div>
                 {doc.signed_at && (
                   <div className="flex justify-between"><span>{t('signedOn')}:</span><span className="font-medium text-slate-700">{new Date(doc.signed_at).toLocaleDateString()}</span></div>
@@ -492,19 +567,62 @@ function AISidePanel({ doc, onClose }: { doc: Document; onClose: () => void }) {
               </div>
             </div>
 
-            {signed ? (
+            {signers.length > 0 && (
+              <div className="rounded-xl border border-slate-200 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{t('signingProgress')}</span>
+                  <span className="text-xs font-medium text-slate-600">{signedCount}/{signers.length}</span>
+                </div>
+                <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-emerald-500 rounded-full transition-all"
+                    style={{ width: signers.length ? `${(signedCount / signers.length) * 100}%` : '0%' }}
+                  />
+                </div>
+                <div className="space-y-2">
+                  {signers.map((signer) => {
+                    const cfg = SIGNER_STATUS_CONFIG[signer.status];
+                    return (
+                      <div key={signer.id} className="flex items-center gap-2 text-xs">
+                        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${cfg.dot}`} />
+                        <span className="text-slate-700 font-medium truncate flex-1">
+                          {signer.user?.full_name || signer.user_id}
+                          {signer.user_id === profile?.id && <span className="text-slate-400 ml-1">(siz)</span>}
+                        </span>
+                        <span className={`px-2 py-0.5 rounded-full ${cfg.bg} ${cfg.text} font-medium capitalize`}>
+                          {signer.status === 'pending' ? t('pendingSignature') : cfg.label}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {signError && (
+              <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-600 text-sm">{signError}</div>
+            )}
+
+            {isFullySigned ? (
               <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 text-center">
                 <CheckCircle size={28} className="text-emerald-500 mx-auto mb-2" />
-                <p className="text-emerald-700 text-sm font-semibold">Document Signed</p>
-                <p className="text-emerald-500 text-xs mt-1">Verified via E-Imzo</p>
+                <p className="text-emerald-700 text-sm font-semibold">{t('allSigned')}</p>
+                <p className="text-emerald-500 text-xs mt-1">E-Imzo orqali tasdiqlangan</p>
+              </div>
+            ) : docStatus === 'rejected' ? (
+              <div className="rounded-xl bg-red-50 border border-red-200 p-4 text-center">
+                <AlertCircle size={28} className="text-red-500 mx-auto mb-2" />
+                <p className="text-red-700 text-sm font-semibold">{t('rejected')}</p>
               </div>
             ) : (
               <>
                 {canSubmitDraft && (
                   <button
                     onClick={async () => {
-                      await updateDocumentStatus(doc.id, 'pending');
-                      onClose();
+                      const updated = await updateDocumentStatus(doc.id, 'pending');
+                      setDocStatus(updated.status);
+                      onDocumentUpdate(updated);
+                      await loadSigners();
                     }}
                     className="w-full py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold transition-all flex items-center justify-center gap-2"
                   >
@@ -512,18 +630,58 @@ function AISidePanel({ doc, onClose }: { doc: Document; onClose: () => void }) {
                     Imzolashga jo&apos;natish
                   </button>
                 )}
-                <div className="rounded-xl border-2 border-dashed border-slate-200 p-6 text-center">
-                  <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-3">
-                    <PenLine size={20} className="text-slate-400" />
+
+                {hasCurrentUserSigned && (
+                  <div className="rounded-xl bg-blue-50 border border-blue-200 p-3 text-center">
+                    <CheckCircle size={20} className="text-blue-500 mx-auto mb-1" />
+                    <p className="text-blue-700 text-sm font-medium">{t('youHaveSigned')}</p>
+                    {mySigner?.signed_at && (
+                      <p className="text-blue-500 text-xs mt-0.5">{new Date(mySigner.signed_at).toLocaleString()}</p>
+                    )}
                   </div>
-                  <p className="text-slate-500 text-sm font-medium">E-Imzo Signature Area</p>
-                  <p className="text-slate-400 text-xs mt-1">Click below to apply your digital signature</p>
-                </div>
-                <button onClick={handleSign} disabled={!canSign || signing}
-                  className="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-200 disabled:text-slate-400 text-white text-sm font-semibold transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20">
-                  {signing ? <><div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />Signing...</> : <><PenLine size={16} />{t('signDocument')}</>}
-                </button>
-                {!canSign && !signed && <p className="text-center text-xs text-slate-400">Only the document owner can sign</p>}
+                )}
+
+                {canSign && (
+                  <>
+                    <div className="rounded-xl border-2 border-dashed border-emerald-200 bg-emerald-50/50 p-6 text-center">
+                      <div className="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center mx-auto mb-3">
+                        <PenLine size={20} className="text-emerald-600" />
+                      </div>
+                      <p className="text-emerald-700 text-sm font-medium">{t('awaitingYourSignature')}</p>
+                      <p className="text-emerald-600/70 text-xs mt-1">E-Imzo bilan raqamli imzo qo&apos;ying</p>
+                    </div>
+                    <button
+                      onClick={handleSign}
+                      disabled={signing}
+                      className="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-200 disabled:text-slate-400 text-white text-sm font-semibold transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20"
+                    >
+                      {signing ? (
+                        <><div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />{t('loading')}</>
+                      ) : (
+                        <><PenLine size={16} />{t('signDocument')}</>
+                      )}
+                    </button>
+                    <div className="space-y-2">
+                      <input
+                        value={rejectReason}
+                        onChange={(e) => setRejectReason(e.target.value)}
+                        placeholder={t('rejectionReason')}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-red-500"
+                      />
+                      <button
+                        onClick={handleReject}
+                        disabled={rejecting}
+                        className="w-full py-2.5 px-4 rounded-xl border border-red-200 text-red-600 text-sm font-medium hover:bg-red-50 disabled:opacity-60 transition-colors flex items-center justify-center gap-2"
+                      >
+                        {rejecting ? t('loading') : t('rejectDocument')}
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {!canSign && !hasCurrentUserSigned && docStatus === 'pending' && (
+                  <p className="text-center text-xs text-slate-400">{t('onlySignersCanSign')}</p>
+                )}
               </>
             )}
           </div>
@@ -551,8 +709,7 @@ export default function DocumentsPage() {
     if (!profile) return;
     setLoading(true);
     try {
-      const dept = profile.role === 'director' ? profile.department : undefined;
-      const data = await getDocuments(dept ? { department: dept } : undefined);
+      const data = await getAccessibleDocuments(profile);
       setDocs(data);
     } finally {
       setLoading(false);
@@ -632,12 +789,34 @@ export default function DocumentsPage() {
   }, [profile]);
 
   const handleStatusChange = async (docId: string, status: Document['status']) => {
-    await updateDocumentStatus(docId, status);
+    const updated = await updateDocumentStatus(docId, status);
     await load();
     if (selectedDoc?.id === docId) {
-      setSelectedDoc(prev => prev ? { ...prev, status } : prev);
+      setSelectedDoc(updated);
     }
   };
+
+  const handleDocumentUpdate = (updated: Document) => {
+    setDocs((prev) => prev.map((d) => (d.id === updated.id ? { ...d, ...updated } : d)));
+    if (selectedDoc?.id === updated.id) {
+      setSelectedDoc((prev) => (prev ? { ...prev, ...updated } : prev));
+    }
+  };
+
+  const handleQuickSign = async (docId: string) => {
+    try {
+      const result = await signDocument(docId);
+      handleDocumentUpdate(result.document);
+      setSelectedDoc((prev) => (prev?.id === docId ? result.document : prev));
+    } catch {
+      // open side panel for error display
+      const doc = docs.find((d) => d.id === docId);
+      if (doc) setSelectedDoc(doc);
+    }
+  };
+
+  const isPendingSigner = (doc: Document) =>
+    profile ? isPendingSignerForUser(doc, profile) : false;
 
   const filtered = docs.filter((d) => {
     const matchSearch = d.title.toLowerCase().includes(search.toLowerCase()) ||
@@ -746,6 +925,12 @@ export default function DocumentsPage() {
                           <span className={`flex-shrink-0 inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ${sc.bg} ${sc.text}`}>
                             <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />{sc.label}
                           </span>
+                          {isPendingSigner(doc) && (
+                            <span className="flex-shrink-0 inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
+                              <PenLine size={10} />
+                              {t('awaitingYourSignature')}
+                            </span>
+                          )}
                         </div>
                         <div className="flex items-center gap-2 mt-1 text-xs text-slate-400 flex-wrap">
                           <span>{doc.owner?.full_name}</span>
@@ -786,7 +971,7 @@ export default function DocumentsPage() {
                     </div>
 
                     {/* Inline actions for non-employee or owner */}
-                    {(profile?.role !== 'employee' || profile?.id === doc.owner_id) && !isSelected && (
+                    {!isSelected && (profile?.id === doc.owner_id || isPendingSigner(doc) || profile?.role !== 'employee') && (
                       <div className="flex items-center gap-2 px-4 pb-3 flex-wrap" onClick={(e) => e.stopPropagation()}>
                         {doc.status === 'draft' && profile?.id === doc.owner_id && (
                           <button
@@ -800,17 +985,19 @@ export default function DocumentsPage() {
                         {doc.status === 'draft' && profile?.id === doc.owner_id && (
                           <span className="text-[11px] text-slate-400">Draft saqlangan. Xohlagan payt yuborishingiz mumkin.</span>
                         )}
-                        {doc.status === 'pending' && profile?.role === 'director' && (
-                          <>
-                            <button onClick={() => handleStatusChange(doc.id, 'signed')}
-                              className="px-2.5 py-1 text-xs font-medium rounded-lg bg-emerald-100 text-emerald-700 hover:bg-emerald-200 transition-colors">
-                              Approve
-                            </button>
-                            <button onClick={() => handleStatusChange(doc.id, 'rejected')}
-                              className="px-2.5 py-1 text-xs font-medium rounded-lg bg-red-100 text-red-700 hover:bg-red-200 transition-colors">
-                              Reject
-                            </button>
-                          </>
+                        {doc.status === 'pending' && isPendingSigner(doc) && (
+                          <button
+                            onClick={() => handleQuickSign(doc.id)}
+                            className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-500 transition-colors inline-flex items-center gap-1.5"
+                          >
+                            <PenLine size={12} />
+                            {t('signDocument')}
+                          </button>
+                        )}
+                        {doc.status === 'pending' && doc.signers && doc.signers.length > 0 && (
+                          <span className="text-[11px] text-slate-400">
+                            {doc.signers.filter((s) => s.status === 'signed').length}/{doc.signers.length} imzolangan
+                          </span>
                         )}
                       </div>
                     )}
@@ -832,7 +1019,7 @@ export default function DocumentsPage() {
             </button>
           </div>
           <div className="flex-1 overflow-hidden">
-            <AISidePanel doc={selectedDoc} onClose={() => setSelectedDoc(null)} />
+            <AISidePanel doc={selectedDoc} onClose={() => setSelectedDoc(null)} onDocumentUpdate={handleDocumentUpdate} />
           </div>
         </div>
       )}

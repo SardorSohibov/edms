@@ -13,6 +13,19 @@ export interface Profile {
   updated_at: string;
 }
 
+export type SignerStatus = 'pending' | 'signed' | 'rejected';
+
+export interface DocumentSigner {
+  id: string;
+  document_id: string;
+  user_id: string;
+  status: SignerStatus;
+  signed_at: string | null;
+  comment: string | null;
+  created_at: string;
+  user?: Profile;
+}
+
 export interface Document {
   id: string;
   title: string;
@@ -27,6 +40,7 @@ export interface Document {
   created_at: string;
   updated_at: string;
   owner?: Profile;
+  signers?: DocumentSigner[];
 }
 
 export interface DocumentAnalysis {
