@@ -70,6 +70,7 @@ export interface DashboardStats {
   rejected: number;
   signed: number;
   draft: number;
+  signed_by_me: number;
 }
 
 export interface Department {

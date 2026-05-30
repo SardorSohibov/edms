@@ -1,6 +1,6 @@
 'use client';
 
-import { FileText, Clock, Zap, Circle as XCircle, CircleCheck as CheckCircle, FolderOpen } from 'lucide-react';
+import { FileText, Clock, Zap, Circle as XCircle, CircleCheck as CheckCircle, FolderOpen, PenLine } from 'lucide-react';
 import { DashboardStats } from '@/lib/supabase';
 import { useLang } from '@/contexts/language-context';
 
@@ -8,7 +8,7 @@ interface StatCardProps {
   label: string;
   value: number;
   icon: React.ElementType;
-  color: 'blue' | 'amber' | 'emerald' | 'red' | 'slate' | 'teal';
+  color: 'blue' | 'amber' | 'emerald' | 'red' | 'slate' | 'teal' | 'violet';
   trend?: number;
 }
 
@@ -55,6 +55,13 @@ const colorMap = {
     badge: 'bg-teal-500',
     border: 'border-teal-100',
   },
+  violet: {
+    bg: 'bg-violet-50',
+    icon: 'bg-violet-100 text-violet-600',
+    value: 'text-violet-700',
+    badge: 'bg-violet-500',
+    border: 'border-violet-100',
+  },
 };
 
 function StatCard({ label, value, icon: Icon, color }: StatCardProps) {
@@ -86,11 +93,12 @@ export function StatsCards({ stats }: StatsCardsProps) {
     { label: t('aiAnalyzed'), value: stats.ai_analyzed, icon: Zap, color: 'teal' },
     { label: t('rejected'), value: stats.rejected, icon: XCircle, color: 'red' },
     { label: t('signed'), value: stats.signed, icon: CheckCircle, color: 'emerald' },
+    { label: t('signedByMe'), value: stats.signed_by_me, icon: PenLine, color: 'violet' },
     { label: t('draft'), value: stats.draft, icon: FolderOpen, color: 'slate' },
   ];
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-4">
+    <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-4">
       {cards.map((card) => (
         <StatCard key={card.label} {...card} />
       ))}

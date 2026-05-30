@@ -266,7 +266,7 @@ export async function getDocuments(filters?: {
   return documents;
 }
 
-function mergeDocumentsById(...lists: Document[][]): Document[] {
+export function mergeDocumentsById(...lists: Document[][]): Document[] {
   const map = new Map<string, Document>();
   for (const list of lists) {
     for (const doc of list) {
@@ -406,6 +406,38 @@ export async function getDepartmentEmployees(department: string): Promise<Profil
   return getUsers('employee', department);
 }
 
+export async function getDepartmentSigners(department: string): Promise<Profile[]> {
+  const [employees, directors] = await Promise.all([
+    getUsers('employee', department).catch(() => [] as Profile[]),
+    getUsers('director', department).catch(() => [] as Profile[]),
+  ]);
+
+  const merged = [...directors, ...employees];
+  const seen = new Set<string>();
+
+  return merged.filter((user) => {
+    if (!user.is_active || seen.has(user.id)) return false;
+    seen.add(user.id);
+    return true;
+  });
+}
+
+function mergeProfilesById(users: Profile[]): Profile[] {
+  const seen = new Set<string>();
+  return users.filter((user) => {
+    if (seen.has(user.id)) return false;
+    seen.add(user.id);
+    return true;
+  });
+}
+
+export async function getSignersFromDepartments(departments: string[]): Promise<Profile[]> {
+  if (!departments.length) return [];
+
+  const lists = await Promise.all(departments.map((department) => getDepartmentSigners(department)));
+  return mergeProfilesById(lists.flat());
+}
+
 export async function updateDocumentStatus(id: string, status: Document['status']): Promise<Document> {
   const data = await backendRequest<Record<string, unknown>>(`/api/documents/${id}/status`, {
     method: 'PATCH',
@@ -474,7 +506,7 @@ export async function getDocumentAnalyses(documentId: string): Promise<DocumentA
 
 // ─── Stats ───────────────────────────────────────────────────────────────────
 
-export function computeStatsFromDocuments(docs: Document[]): DashboardStats {
+export function computeStatsFromDocuments(docs: Document[], signedByMe = 0): DashboardStats {
   return {
     total_documents: docs.length,
     pending_signatures: docs.filter((d) => d.status === 'pending').length,
@@ -482,7 +514,57 @@ export function computeStatsFromDocuments(docs: Document[]): DashboardStats {
     rejected: docs.filter((d) => d.status === 'rejected').length,
     draft: docs.filter((d) => d.status === 'draft').length,
     ai_analyzed: docs.filter((d) => d.ai_analyzed).length,
+    signed_by_me: signedByMe,
   };
+}
+
+export function countDocumentsSignedByUser(
+  docs: Document[],
+  profile: Pick<Profile, 'id'>
+): number {
+  return docs.filter((doc) =>
+    doc.signers?.some((signer) => signer.user_id === profile.id && signer.status === 'signed')
+  ).length;
+}
+
+export async function getDocumentsSignedByUser(profile: Profile): Promise<Document[]> {
+  try {
+    const data = await backendRequest<unknown>(
+      `/api/documents/signed-by-me${buildQuery({ user_id: profile.id })}`
+    );
+    const documents = normalizeDocuments(data);
+    if (documents.length) return documents;
+  } catch {
+    // optional backend endpoint
+  }
+
+  const pools: Document[][] = [];
+
+  try {
+    pools.push(await getDocuments({ signer_id: profile.id }));
+  } catch {
+    // signer_id filter may be unsupported
+  }
+
+  try {
+    if (profile.role === 'director') {
+      pools.push(await getDocuments({ department: profile.department, status: 'signed' }));
+    } else if (profile.role === 'admin') {
+      pools.push(await getDocuments({ status: 'signed' }));
+    } else {
+      pools.push(await getDocuments({ department: profile.department, status: 'signed' }));
+    }
+  } catch {
+    // ignore pool fetch errors
+  }
+
+  const users = await getUsers().catch(() => [] as Profile[]);
+  const merged = mergeDocumentsById(...pools);
+  const enriched = await Promise.all(merged.map((doc) => enrichDocumentSigners(doc, users)));
+
+  return enriched.filter((doc) =>
+    doc.signers?.some((signer) => signer.user_id === profile.id && signer.status === 'signed')
+  );
 }
 
 export function computeMonthlyChartFromDocuments(docs: Document[]) {

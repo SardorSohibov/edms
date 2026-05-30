@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@/contexts/auth-context';
 import { useLang } from '@/contexts/language-context';
-import { getAccessibleDocuments, createDocument, updateDocumentStatus, analyzeDocument, getDocumentAnalyses, getUsers, getDepartmentEmployees, getDocumentSigners, signDocument, rejectDocument, enrichDocumentSigners, isPendingSignerForUser } from '@/lib/api';
+import { getAccessibleDocuments, createDocument, updateDocumentStatus, analyzeDocument, getDocumentAnalyses, getUsers, getSignersFromDepartments, getDocumentSigners, signDocument, rejectDocument, enrichDocumentSigners, isPendingSignerForUser, parseRecipientNames } from '@/lib/api';
 import { Document, DocumentAnalysis, DocumentSigner, Profile } from '@/lib/supabase';
 import { useDepartments } from '@/hooks/use-departments';
 import { FileText, Plus, Search, X, Zap, PenLine, ChevronDown, ChevronRight, Sparkles, Scale, Calendar, CircleCheck as CheckCircle, Clock, CircleAlert as AlertCircle, FolderOpen, ArrowLeft, RefreshCw, Upload, Send, Download, Eye } from 'lucide-react';
@@ -41,7 +41,7 @@ type CreateDocPayload = {
 
 function CreateDocModal({
   open, onClose, onSubmit, loading, error,
-  callerRole, profileId, lockedDepartment, departments, departmentsLoading, approvers,
+  callerRole, profileId, ownerDepartment, lockedDepartment, departments, departmentsLoading, approvers,
 }: {
   open: boolean;
   onClose: () => void;
@@ -50,6 +50,7 @@ function CreateDocModal({
   error: string;
   callerRole: string;
   profileId: string;
+  ownerDepartment: string;
   lockedDepartment: string;
   departments: string[];
   departmentsLoading: boolean;
@@ -57,20 +58,23 @@ function CreateDocModal({
 }) {
   const { t } = useLang();
   const isEmployee = callerRole === 'employee';
-  const showDepartmentSelect = isEmployee || callerRole === 'admin';
+  const isAdmin = callerRole === 'admin';
+  const documentDepartment = isEmployee ? ownerDepartment : lockedDepartment || '';
+  const showDepartmentSelect = isAdmin;
 
   const [form, setForm] = useState({
     title: '',
     description: '',
     content: '',
-    department: lockedDepartment || '',
+    department: documentDepartment,
     recipientIds: [] as string[],
   });
   const [fileName, setFileName] = useState('');
   const [fileDataUrl, setFileDataUrl] = useState('');
   const [localError, setLocalError] = useState('');
-  const [departmentEmployees, setDepartmentEmployees] = useState<Profile[]>([]);
-  const [employeesLoading, setEmployeesLoading] = useState(false);
+  const [selectedSignerDepartments, setSelectedSignerDepartments] = useState<string[]>([]);
+  const [departmentSigners, setDepartmentSigners] = useState<Profile[]>([]);
+  const [signersLoading, setSignersLoading] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -78,46 +82,61 @@ function CreateDocModal({
         title: '',
         description: '',
         content: '',
-        department: lockedDepartment || '',
+        department: documentDepartment,
         recipientIds: [],
       });
       setFileName('');
       setFileDataUrl('');
       setLocalError('');
-      setDepartmentEmployees([]);
+      setSelectedSignerDepartments([]);
+      setDepartmentSigners([]);
     }
-  }, [open, lockedDepartment]);
+  }, [open, documentDepartment]);
 
   useEffect(() => {
-    if (!open || !isEmployee || !form.department) {
-      setDepartmentEmployees([]);
+    if (!open || !isEmployee || selectedSignerDepartments.length === 0) {
+      setDepartmentSigners([]);
       return;
     }
 
     let cancelled = false;
-    setEmployeesLoading(true);
-    getDepartmentEmployees(form.department)
+    setSignersLoading(true);
+    getSignersFromDepartments(selectedSignerDepartments)
       .then((users) => {
         if (!cancelled) {
-          setDepartmentEmployees(users.filter((u) => u.id !== profileId && u.is_active));
+          const filtered = users.filter((u) => u.id !== profileId);
+          setDepartmentSigners(filtered);
+          setForm((prev) => ({
+            ...prev,
+            recipientIds: prev.recipientIds.filter((id) => filtered.some((u) => u.id === id)),
+          }));
         }
       })
       .catch(() => {
-        if (!cancelled) setDepartmentEmployees([]);
+        if (!cancelled) setDepartmentSigners([]);
       })
       .finally(() => {
-        if (!cancelled) setEmployeesLoading(false);
+        if (!cancelled) setSignersLoading(false);
       });
 
     return () => { cancelled = true; };
-  }, [open, isEmployee, form.department, profileId]);
+  }, [open, isEmployee, selectedSignerDepartments, profileId]);
+
+  const toggleSignerDepartment = (department: string) => {
+    setSelectedSignerDepartments((prev) =>
+      prev.includes(department) ? prev.filter((d) => d !== department) : [...prev, department]
+    );
+    setLocalError('');
+  };
 
   if (!open) return null;
 
-  const recipientList = isEmployee ? departmentEmployees : approvers;
+  const recipientList = isEmployee ? departmentSigners : approvers;
 
   const validate = (submitForSignature: boolean) => {
+    if (!form.title.trim()) return t('documentTitle');
     if (isEmployee && !fileDataUrl) return t('fileRequired');
+    if (isEmployee && !ownerDepartment) return t('selectDepartmentFirst');
     if (showDepartmentSelect && !form.department) return t('selectDepartmentFirst');
     if (submitForSignature && form.recipientIds.length === 0) return t('selectApprovers');
     return '';
@@ -135,7 +154,7 @@ function CreateDocModal({
       title: form.title,
       description: form.description,
       content: form.content,
-      department: form.department,
+      department: isEmployee ? ownerDepartment : form.department,
       recipientIds: form.recipientIds,
       recipientNames: selectedRecipients.map((r) => r.full_name),
       fileName,
@@ -145,9 +164,14 @@ function CreateDocModal({
   };
 
   const handleDepartmentChange = (department: string) => {
-    setForm((prev) => ({ ...prev, department, recipientIds: [] }));
+    setForm((prev) => ({ ...prev, department }));
     setLocalError('');
   };
+
+  const signersByDepartment = selectedSignerDepartments.map((department) => ({
+    department,
+    users: departmentSigners.filter((user) => user.department === department),
+  }));
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/50 backdrop-blur-sm">
@@ -178,32 +202,38 @@ function CreateDocModal({
               className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="Short description" />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">
-              {isEmployee ? t('targetDepartment') : t('department')}
-            </label>
-            {lockedDepartment && !isEmployee ? (
-              <input value={lockedDepartment} disabled className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-500 bg-slate-50" />
-            ) : showDepartmentSelect ? (
-              <div className="relative">
-                <select
-                  required
-                  value={form.department}
-                  onChange={(e) => handleDepartmentChange(e.target.value)}
-                  disabled={departmentsLoading || departments.length === 0}
-                  className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none bg-white disabled:bg-slate-50 disabled:text-slate-400"
-                >
-                  <option value="">
-                    {departmentsLoading ? t('loading') : departments.length === 0 ? t('noData') : t('department')}
-                  </option>
-                  {departments.map((d) => <option key={d} value={d}>{d}</option>)}
-                </select>
-                <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-              </div>
-            ) : (
-              <input value={form.department} disabled className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-500 bg-slate-50" />
-            )}
-          </div>
+          {isEmployee && ownerDepartment && (
+            <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm">
+              <span className="text-slate-500">{t('documentDepartment')}:</span>
+              <span className="font-medium text-slate-800">{ownerDepartment}</span>
+            </div>
+          )}
+          {!isEmployee && (
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">{t('department')}</label>
+              {lockedDepartment ? (
+                <input value={lockedDepartment} disabled className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-500 bg-slate-50" />
+              ) : showDepartmentSelect ? (
+                <div className="relative">
+                  <select
+                    required
+                    value={form.department}
+                    onChange={(e) => handleDepartmentChange(e.target.value)}
+                    disabled={departmentsLoading || departments.length === 0}
+                    className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none bg-white disabled:bg-slate-50 disabled:text-slate-400"
+                  >
+                    <option value="">
+                      {departmentsLoading ? t('loading') : departments.length === 0 ? t('noData') : t('department')}
+                    </option>
+                    {departments.map((d) => <option key={d} value={d}>{d}</option>)}
+                  </select>
+                  <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                </div>
+              ) : (
+                <input value={form.department} disabled className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-500 bg-slate-50" />
+              )}
+            </div>
+          )}
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1.5">Content</label>
             <textarea rows={4} value={form.content} onChange={(e) => setForm({ ...form, content: e.target.value })}
@@ -237,70 +267,141 @@ function CreateDocModal({
               />
             </label>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">
-              {isEmployee ? t('departmentEmployees') : 'Send for Signature'}
-            </label>
-            {isEmployee && !form.department ? (
-              <p className="text-xs text-slate-400 px-3 py-2 border border-slate-200 rounded-xl">{t('selectDepartmentFirst')}</p>
-            ) : (
-              <div className="max-h-40 overflow-y-auto border border-slate-200 rounded-xl p-2 space-y-1">
-                {employeesLoading ? (
-                  <p className="text-xs text-slate-400 px-2 py-1">{t('loading')}</p>
-                ) : recipientList.length === 0 ? (
-                  <p className="text-xs text-slate-400 px-2 py-1">{t('noData')}</p>
-                ) : recipientList.map((user) => {
-                  const checked = form.recipientIds.includes(user.id);
+          {isEmployee && (
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">{t('signerDepartments')}</label>
+              <div className="flex flex-wrap gap-2 p-3 border border-slate-200 rounded-xl max-h-32 overflow-y-auto">
+                {departmentsLoading ? (
+                  <p className="text-xs text-slate-400">{t('loading')}</p>
+                ) : departments.length === 0 ? (
+                  <p className="text-xs text-slate-400">{t('noData')}</p>
+                ) : departments.map((department) => {
+                  const checked = selectedSignerDepartments.includes(department);
                   return (
-                    <label key={user.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer">
+                    <label
+                      key={department}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium cursor-pointer border transition-colors ${
+                        checked
+                          ? 'bg-blue-600 text-white border-blue-600'
+                          : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
                       <input
                         type="checkbox"
+                        className="sr-only"
                         checked={checked}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setForm((prev) => ({ ...prev, recipientIds: [...prev.recipientIds, user.id] }));
-                          } else {
-                            setForm((prev) => ({ ...prev, recipientIds: prev.recipientIds.filter((id) => id !== user.id) }));
-                          }
-                          setLocalError('');
-                        }}
+                        onChange={() => toggleSignerDepartment(department)}
                       />
-                      <span className="text-sm text-slate-700">{user.full_name}</span>
-                      <span className="text-xs text-slate-400 ml-auto">{user.department}</span>
+                      {department}
                     </label>
                   );
                 })}
               </div>
+            </div>
+          )}
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">
+              {isEmployee ? t('departmentSigners') : 'Send for Signature'}
+            </label>
+            {isEmployee && selectedSignerDepartments.length === 0 ? (
+              <p className="text-xs text-slate-400 px-3 py-2 border border-slate-200 rounded-xl">{t('selectSignerDepartmentsFirst')}</p>
+            ) : (
+              <div className="max-h-48 overflow-y-auto border border-slate-200 rounded-xl p-2 space-y-2">
+                {signersLoading ? (
+                  <p className="text-xs text-slate-400 px-2 py-1">{t('loading')}</p>
+                ) : recipientList.length === 0 ? (
+                  <p className="text-xs text-slate-400 px-2 py-1">{t('noData')}</p>
+                ) : isEmployee ? (
+                  signersByDepartment.map(({ department, users }) =>
+                    users.length === 0 ? null : (
+                      <div key={department}>
+                        <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider px-2 py-1">{department}</p>
+                        {users.map((user) => {
+                          const checked = form.recipientIds.includes(user.id);
+                          const roleLabel = t(user.role as Parameters<typeof t>[0]);
+                          return (
+                            <label key={user.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setForm((prev) => ({ ...prev, recipientIds: [...prev.recipientIds, user.id] }));
+                                  } else {
+                                    setForm((prev) => ({ ...prev, recipientIds: prev.recipientIds.filter((id) => id !== user.id) }));
+                                  }
+                                  setLocalError('');
+                                }}
+                              />
+                              <span className="text-sm text-slate-700">{user.full_name}</span>
+                              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ml-auto ${
+                                user.role === 'director' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'
+                              }`}>
+                                {roleLabel}
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )
+                  )
+                ) : (
+                  recipientList.map((user) => {
+                    const checked = form.recipientIds.includes(user.id);
+                    const roleLabel = t(user.role as Parameters<typeof t>[0]);
+                    return (
+                      <label key={user.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setForm((prev) => ({ ...prev, recipientIds: [...prev.recipientIds, user.id] }));
+                            } else {
+                              setForm((prev) => ({ ...prev, recipientIds: prev.recipientIds.filter((id) => id !== user.id) }));
+                            }
+                            setLocalError('');
+                          }}
+                        />
+                        <span className="text-sm text-slate-700">{user.full_name}</span>
+                        <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ml-auto ${
+                          user.role === 'director' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'
+                        }`}>
+                          {roleLabel}
+                        </span>
+                      </label>
+                    );
+                  })
+                )}
+              </div>
             )}
           </div>
-          <div className={`grid grid-cols-1 gap-2 pt-2 ${isEmployee ? 'sm:grid-cols-2' : 'sm:grid-cols-3'}`}>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2">
             <button
               type="button"
               onClick={onClose}
-              className="sm:col-span-1 py-2.5 px-4 rounded-xl border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50 transition-colors"
+              className="py-2.5 px-4 rounded-xl border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50 transition-colors"
             >
               {t('cancel')}
             </button>
-            {!isEmployee && (
-              <button
-                type="button"
-                disabled={loading}
-                onClick={() => submitForm(false)}
-                className="sm:col-span-1 py-2.5 px-4 rounded-xl border border-blue-200 text-blue-700 text-sm font-semibold hover:bg-blue-50 disabled:opacity-60 transition-colors"
-              >
-                {loading ? 'Saving...' : 'Draft saqlash'}
-              </button>
-            )}
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => submitForm(false)}
+              className="py-2.5 px-4 rounded-xl border border-blue-200 text-blue-700 text-sm font-semibold hover:bg-blue-50 disabled:opacity-60 transition-colors"
+            >
+              {loading ? t('saving') : t('saveDraft')}
+            </button>
             <button
               type="button"
               disabled={loading}
               onClick={() => submitForm(true)}
-              className={`${isEmployee ? 'sm:col-span-2' : 'sm:col-span-1'} py-2.5 px-4 rounded-xl bg-blue-600 text-white text-sm font-semibold hover:bg-blue-500 disabled:opacity-60 transition-colors flex items-center justify-center gap-2`}
+              className="py-2.5 px-4 rounded-xl bg-blue-600 text-white text-sm font-semibold hover:bg-blue-500 disabled:opacity-60 transition-colors flex items-center justify-center gap-2"
             >
               {loading ? (
                 <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />{t('loading')}</>
               ) : (
-                <><Send size={14} />{isEmployee ? t('sendForApproval') : "Imzolashga jo'natish"}</>
+                <><Send size={14} />{isEmployee ? t('sendForApproval') : t('submitDocument')}</>
               )}
             </button>
           </div>
@@ -320,10 +421,12 @@ function AISidePanel({
   doc,
   onClose,
   onDocumentUpdate,
+  onSubmitDraft,
 }: {
   doc: Document;
   onClose: () => void;
   onDocumentUpdate: (doc: Document) => void;
+  onSubmitDraft: (doc: Document) => Promise<string | null>;
 }) {
   const { t } = useLang();
   const { profile } = useAuth();
@@ -333,6 +436,7 @@ function AISidePanel({
   const [signing, setSigning] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [signError, setSignError] = useState('');
+  const [draftSubmitError, setDraftSubmitError] = useState('');
   const [rejectReason, setRejectReason] = useState('');
   const [docStatus, setDocStatus] = useState(doc.status);
   const [activeTab, setActiveTab] = useState<'ai' | 'sign'>(doc.status === 'pending' ? 'sign' : 'ai');
@@ -617,18 +721,28 @@ function AISidePanel({
             ) : (
               <>
                 {canSubmitDraft && (
-                  <button
-                    onClick={async () => {
-                      const updated = await updateDocumentStatus(doc.id, 'pending');
-                      setDocStatus(updated.status);
-                      onDocumentUpdate(updated);
-                      await loadSigners();
-                    }}
-                    className="w-full py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold transition-all flex items-center justify-center gap-2"
-                  >
-                    <Send size={15} />
-                    Imzolashga jo&apos;natish
-                  </button>
+                  <>
+                    {draftSubmitError && (
+                      <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-600 text-sm">{draftSubmitError}</div>
+                    )}
+                    <button
+                      onClick={async () => {
+                        setDraftSubmitError('');
+                        const error = await onSubmitDraft(doc);
+                        if (error) {
+                          setDraftSubmitError(error);
+                          return;
+                        }
+                        setDocStatus('pending');
+                        await loadSigners();
+                      }}
+                      className="w-full py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold transition-all flex items-center justify-center gap-2"
+                    >
+                      <Send size={15} />
+                      {t('submitDocument')}
+                    </button>
+                    <p className="text-center text-xs text-slate-400">{t('draftSavedHint')}</p>
+                  </>
                 )}
 
                 {hasCurrentUserSigned && (
@@ -704,6 +818,7 @@ export default function DocumentsPage() {
   const [createLoading, setCreateLoading] = useState(false);
   const [createError, setCreateError] = useState('');
   const [selectedDoc, setSelectedDoc] = useState<Document | null>(null);
+  const [draftActionError, setDraftActionError] = useState<{ docId: string; message: string } | null>(null);
 
   const load = useCallback(async () => {
     if (!profile) return;
@@ -796,6 +911,21 @@ export default function DocumentsPage() {
     }
   };
 
+  const handleSubmitDraft = async (doc: Document): Promise<string | null> => {
+    const enriched = await enrichDocumentSigners(doc);
+    const hasRecipients =
+      (enriched.signers?.length ?? 0) > 0 ||
+      parseRecipientNames(enriched.description).length > 0;
+
+    if (!hasRecipients) {
+      return t('selectApproversBeforeSubmit');
+    }
+
+    await handleStatusChange(doc.id, 'pending');
+    setDraftActionError(null);
+    return null;
+  };
+
   const handleDocumentUpdate = (updated: Document) => {
     setDocs((prev) => prev.map((d) => (d.id === updated.id ? { ...d, ...updated } : d)));
     if (selectedDoc?.id === updated.id) {
@@ -827,6 +957,7 @@ export default function DocumentsPage() {
   });
 
   const lockedDepartment = profile?.role === 'director' ? profile.department : '';
+  const canCreateDocument = profile?.role !== 'admin';
 
   const getFileName = (doc: Document) => {
     const match = doc.description.match(/File:\s*([^|\n]+)/i);
@@ -863,12 +994,14 @@ export default function DocumentsPage() {
               <button onClick={load} className="p-2.5 rounded-xl border border-slate-200 bg-white text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all shadow-sm">
                 <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
               </button>
-              <button
-                onClick={() => { setCreateError(''); setCreateOpen(true); }}
-                className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-xl hover:bg-blue-500 transition-colors shadow-lg shadow-blue-600/25"
-              >
-                <Plus size={16} />{t('newDocument')}
-              </button>
+              {canCreateDocument && (
+                <button
+                  onClick={() => { setCreateError(''); setCreateOpen(true); }}
+                  className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-xl hover:bg-blue-500 transition-colors shadow-lg shadow-blue-600/25"
+                >
+                  <Plus size={16} />{t('newDocument')}
+                </button>
+              )}
             </div>
           </div>
 
@@ -900,9 +1033,11 @@ export default function DocumentsPage() {
                 <FileText size={24} className="text-slate-400" />
               </div>
               <p className="text-slate-500 font-medium">{t('noData')}</p>
-              <button onClick={() => setCreateOpen(true)} className="mt-4 px-4 py-2 bg-blue-600 text-white text-sm rounded-xl hover:bg-blue-500 transition-colors">
-                {t('newDocument')}
-              </button>
+              {canCreateDocument && (
+                <button onClick={() => setCreateOpen(true)} className="mt-4 px-4 py-2 bg-blue-600 text-white text-sm rounded-xl hover:bg-blue-500 transition-colors">
+                  {t('newDocument')}
+                </button>
+              )}
             </div>
           ) : (
             <div className="space-y-2">
@@ -975,15 +1110,24 @@ export default function DocumentsPage() {
                       <div className="flex items-center gap-2 px-4 pb-3 flex-wrap" onClick={(e) => e.stopPropagation()}>
                         {doc.status === 'draft' && profile?.id === doc.owner_id && (
                           <button
-                            onClick={() => handleStatusChange(doc.id, 'pending')}
+                            onClick={async () => {
+                              setDraftActionError(null);
+                              const error = await handleSubmitDraft(doc);
+                              if (error) {
+                                setDraftActionError({ docId: doc.id, message: error });
+                              }
+                            }}
                             className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors inline-flex items-center gap-1.5"
                           >
                             <Send size={12} />
-                            Jo&apos;natish
+                            {t('submitDocument')}
                           </button>
                         )}
                         {doc.status === 'draft' && profile?.id === doc.owner_id && (
-                          <span className="text-[11px] text-slate-400">Draft saqlangan. Xohlagan payt yuborishingiz mumkin.</span>
+                          <span className="text-[11px] text-slate-400">{t('draftSavedHint')}</span>
+                        )}
+                        {draftActionError?.docId === doc.id && (
+                          <span className="text-[11px] text-red-600">{draftActionError.message}</span>
                         )}
                         {doc.status === 'pending' && isPendingSigner(doc) && (
                           <button
@@ -1019,24 +1163,27 @@ export default function DocumentsPage() {
             </button>
           </div>
           <div className="flex-1 overflow-hidden">
-            <AISidePanel doc={selectedDoc} onClose={() => setSelectedDoc(null)} onDocumentUpdate={handleDocumentUpdate} />
+            <AISidePanel doc={selectedDoc} onClose={() => setSelectedDoc(null)} onDocumentUpdate={handleDocumentUpdate} onSubmitDraft={handleSubmitDraft} />
           </div>
         </div>
       )}
 
-      <CreateDocModal
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onSubmit={handleCreate}
-        loading={createLoading}
-        error={createError}
-        callerRole={profile?.role || 'employee'}
-        profileId={profile?.id || ''}
-        lockedDepartment={lockedDepartment}
-        departments={departmentNames}
-        departmentsLoading={departmentsLoading}
-        approvers={approvers}
-      />
+      {canCreateDocument && (
+        <CreateDocModal
+          open={createOpen}
+          onClose={() => setCreateOpen(false)}
+          onSubmit={handleCreate}
+          loading={createLoading}
+          error={createError}
+          callerRole={profile?.role || 'employee'}
+          profileId={profile?.id || ''}
+          ownerDepartment={profile?.department || ''}
+          lockedDepartment={lockedDepartment}
+          departments={departmentNames}
+          departmentsLoading={departmentsLoading}
+          approvers={approvers}
+        />
+      )}
     </div>
   );
 }

@@ -3,7 +3,16 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/auth-context';
 import { useLang } from '@/contexts/language-context';
-import { getStats, getMonthlyChartData, getDocuments, computeStatsFromDocuments, computeMonthlyChartFromDocuments } from '@/lib/api';
+import {
+  getStats,
+  getMonthlyChartData,
+  getAccessibleDocuments,
+  getDocumentsSignedByUser,
+  mergeDocumentsById,
+  computeStatsFromDocuments,
+  computeMonthlyChartFromDocuments,
+  countDocumentsSignedByUser,
+} from '@/lib/api';
 import { DashboardStats, Document } from '@/lib/supabase';
 import { StatsCards } from '@/components/stats-cards';
 import { DocumentFlowChart, StatusPieChart } from '@/components/document-chart';
@@ -38,26 +47,32 @@ export default function DashboardPage() {
     const loadDashboard = async () => {
       setLoading(true);
       try {
+        const [accessible, signedByMeDocs] = await Promise.all([
+          getAccessibleDocuments(profile),
+          getDocumentsSignedByUser(profile),
+        ]);
+        const allDocs = mergeDocumentsById(accessible, signedByMeDocs);
+        const signedByMe = countDocumentsSignedByUser(allDocs, profile);
+
         if (profile.role === 'employee') {
-          const mine = await getDocuments({ owner_id: profile.id });
-          setStats(computeStatsFromDocuments(mine));
-          setChartData(computeMonthlyChartFromDocuments(mine));
-          setRecentDocs(mine.slice(0, 5));
+          const owned = accessible.filter((doc) => doc.owner_id === profile.id);
+          setStats(computeStatsFromDocuments(owned, signedByMe));
+          setChartData(computeMonthlyChartFromDocuments(owned));
+          setRecentDocs(allDocs.slice(0, 5));
           return;
         }
 
         const filters =
           profile.role === 'director' ? { department: profile.department } : undefined;
 
-        const [s, c, docs] = await Promise.all([
+        const [s, c] = await Promise.all([
           getStats(filters),
           getMonthlyChartData(filters),
-          getDocuments(filters),
         ]);
 
-        setStats(s);
+        setStats({ ...s, signed_by_me: signedByMe });
         setChartData(c);
-        setRecentDocs(docs.slice(0, 5));
+        setRecentDocs(allDocs.slice(0, 5));
       } finally {
         setLoading(false);
       }
@@ -71,8 +86,8 @@ export default function DashboardPage() {
       <div className="p-6 lg:p-8">
         <div className="animate-pulse space-y-6">
           <div className="h-8 bg-slate-200 rounded-xl w-64" />
-          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-4">
-            {[...Array(6)].map((_, i) => <div key={i} className="h-28 bg-slate-200 rounded-2xl" />)}
+          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-4">
+            {[...Array(7)].map((_, i) => <div key={i} className="h-28 bg-slate-200 rounded-2xl" />)}
           </div>
           <div className="grid lg:grid-cols-3 gap-4">
             <div className="lg:col-span-2 h-72 bg-slate-200 rounded-2xl" />
