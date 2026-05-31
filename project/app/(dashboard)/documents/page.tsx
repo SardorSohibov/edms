@@ -3,10 +3,10 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@/contexts/auth-context';
 import { useLang } from '@/contexts/language-context';
-import { getAccessibleDocuments, createDocument, updateDocumentStatus, analyzeDocument, getDocumentAnalyses, getUsers, getSignersFromDepartments, getDocumentSigners, signDocument, rejectDocument, enrichDocumentSigners, isPendingSignerForUser, parseRecipientNames } from '@/lib/api';
+import { getAccessibleDocuments, createDocument, updateDocumentStatus, analyzeDocument, getDocumentAnalyses, getSignersFromDepartments, getDocumentSigners, signDocument, rejectDocument, enrichDocumentSigners, isPendingSignerForUser, parseRecipientNames } from '@/lib/api';
 import { Document, DocumentAnalysis, DocumentSigner, Profile } from '@/lib/supabase';
 import { useDepartments } from '@/hooks/use-departments';
-import { FileText, Plus, Search, X, Zap, PenLine, ChevronDown, ChevronRight, Sparkles, Scale, Calendar, CircleCheck as CheckCircle, Clock, CircleAlert as AlertCircle, FolderOpen, ArrowLeft, RefreshCw, Upload, Send, Download, Eye } from 'lucide-react';
+import { FileText, Plus, Search, X, Zap, PenLine, ChevronRight, Sparkles, Scale, Calendar, CircleCheck as CheckCircle, Clock, CircleAlert as AlertCircle, FolderOpen, ArrowLeft, RefreshCw, Upload, Send, Download, Eye } from 'lucide-react';
 
 const STATUS_CONFIG = {
   draft: { label: 'Draft', icon: FolderOpen, bg: 'bg-slate-100', text: 'text-slate-600', dot: 'bg-slate-400' },
@@ -41,7 +41,7 @@ type CreateDocPayload = {
 
 function CreateDocModal({
   open, onClose, onSubmit, loading, error,
-  callerRole, profileId, ownerDepartment, lockedDepartment, departments, departmentsLoading, approvers,
+  callerRole, profileId, ownerDepartment, departments, departmentsLoading,
 }: {
   open: boolean;
   onClose: () => void;
@@ -51,22 +51,16 @@ function CreateDocModal({
   callerRole: string;
   profileId: string;
   ownerDepartment: string;
-  lockedDepartment: string;
   departments: string[];
   departmentsLoading: boolean;
-  approvers: Profile[];
 }) {
   const { t } = useLang();
-  const isEmployee = callerRole === 'employee';
-  const isAdmin = callerRole === 'admin';
-  const documentDepartment = isEmployee ? ownerDepartment : lockedDepartment || '';
-  const showDepartmentSelect = isAdmin;
+  const usesDepartmentSigners = callerRole === 'employee' || callerRole === 'director';
 
   const [form, setForm] = useState({
     title: '',
     description: '',
     content: '',
-    department: documentDepartment,
     recipientIds: [] as string[],
   });
   const [fileName, setFileName] = useState('');
@@ -82,7 +76,6 @@ function CreateDocModal({
         title: '',
         description: '',
         content: '',
-        department: documentDepartment,
         recipientIds: [],
       });
       setFileName('');
@@ -91,10 +84,10 @@ function CreateDocModal({
       setSelectedSignerDepartments([]);
       setDepartmentSigners([]);
     }
-  }, [open, documentDepartment]);
+  }, [open]);
 
   useEffect(() => {
-    if (!open || !isEmployee || selectedSignerDepartments.length === 0) {
+    if (!open || !usesDepartmentSigners || selectedSignerDepartments.length === 0) {
       setDepartmentSigners([]);
       return;
     }
@@ -120,7 +113,7 @@ function CreateDocModal({
       });
 
     return () => { cancelled = true; };
-  }, [open, isEmployee, selectedSignerDepartments, profileId]);
+  }, [open, usesDepartmentSigners, selectedSignerDepartments, profileId]);
 
   const toggleSignerDepartment = (department: string) => {
     setSelectedSignerDepartments((prev) =>
@@ -131,14 +124,12 @@ function CreateDocModal({
 
   if (!open) return null;
 
-  const recipientList = isEmployee ? departmentSigners : approvers;
-
   const validate = (submitForSignature: boolean) => {
     if (!form.title.trim()) return t('documentTitle');
-    if (isEmployee && !fileDataUrl) return t('fileRequired');
-    if (isEmployee && !ownerDepartment) return t('selectDepartmentFirst');
-    if (showDepartmentSelect && !form.department) return t('selectDepartmentFirst');
+    if (usesDepartmentSigners && !fileDataUrl) return t('fileRequired');
+    if (usesDepartmentSigners && !ownerDepartment) return t('selectDepartmentFirst');
     if (submitForSignature && form.recipientIds.length === 0) return t('selectApprovers');
+    if (submitForSignature && selectedSignerDepartments.length === 0) return t('selectSignerDepartmentsFirst');
     return '';
   };
 
@@ -149,23 +140,18 @@ function CreateDocModal({
       return;
     }
     setLocalError('');
-    const selectedRecipients = recipientList.filter((r) => form.recipientIds.includes(r.id));
+    const selectedRecipients = departmentSigners.filter((r) => form.recipientIds.includes(r.id));
     onSubmit({
       title: form.title,
       description: form.description,
       content: form.content,
-      department: isEmployee ? ownerDepartment : form.department,
+      department: ownerDepartment,
       recipientIds: form.recipientIds,
       recipientNames: selectedRecipients.map((r) => r.full_name),
       fileName,
       fileDataUrl,
       submitForSignature,
     });
-  };
-
-  const handleDepartmentChange = (department: string) => {
-    setForm((prev) => ({ ...prev, department }));
-    setLocalError('');
   };
 
   const signersByDepartment = selectedSignerDepartments.map((department) => ({
@@ -202,36 +188,10 @@ function CreateDocModal({
               className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="Short description" />
           </div>
-          {isEmployee && ownerDepartment && (
+          {usesDepartmentSigners && ownerDepartment && (
             <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm">
               <span className="text-slate-500">{t('documentDepartment')}:</span>
               <span className="font-medium text-slate-800">{ownerDepartment}</span>
-            </div>
-          )}
-          {!isEmployee && (
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">{t('department')}</label>
-              {lockedDepartment ? (
-                <input value={lockedDepartment} disabled className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-500 bg-slate-50" />
-              ) : showDepartmentSelect ? (
-                <div className="relative">
-                  <select
-                    required
-                    value={form.department}
-                    onChange={(e) => handleDepartmentChange(e.target.value)}
-                    disabled={departmentsLoading || departments.length === 0}
-                    className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none bg-white disabled:bg-slate-50 disabled:text-slate-400"
-                  >
-                    <option value="">
-                      {departmentsLoading ? t('loading') : departments.length === 0 ? t('noData') : t('department')}
-                    </option>
-                    {departments.map((d) => <option key={d} value={d}>{d}</option>)}
-                  </select>
-                  <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-                </div>
-              ) : (
-                <input value={form.department} disabled className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-500 bg-slate-50" />
-              )}
             </div>
           )}
           <div>
@@ -242,11 +202,11 @@ function CreateDocModal({
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1.5">
-              {isEmployee ? t('attachFile') : 'File Upload'}
-              {isEmployee && <span className="text-red-500 ml-1">*</span>}
+              {t('attachFile')}
+              <span className="text-red-500 ml-1">*</span>
             </label>
             <label className={`flex items-center gap-2 w-full px-3.5 py-2.5 border border-dashed rounded-xl text-sm hover:bg-slate-50 cursor-pointer transition-colors ${
-              isEmployee && !fileDataUrl ? 'border-amber-300 bg-amber-50/50 text-amber-800' : 'border-slate-300 text-slate-600'
+              !fileDataUrl ? 'border-amber-300 bg-amber-50/50 text-amber-800' : 'border-slate-300 text-slate-600'
             }`}>
               <Upload size={15} />
               <span className="truncate">{fileName || 'Choose a file (PDF, DOCX, TXT)'}</span>
@@ -254,7 +214,7 @@ function CreateDocModal({
                 type="file"
                 className="hidden"
                 accept=".pdf,.doc,.docx,.txt"
-                required={isEmployee}
+                required
                 onChange={(e) => {
                   const file = e.target.files?.[0];
                   if (!file) return;
@@ -267,51 +227,47 @@ function CreateDocModal({
               />
             </label>
           </div>
-          {isEmployee && (
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">{t('signerDepartments')}</label>
-              <div className="flex flex-wrap gap-2 p-3 border border-slate-200 rounded-xl max-h-32 overflow-y-auto">
-                {departmentsLoading ? (
-                  <p className="text-xs text-slate-400">{t('loading')}</p>
-                ) : departments.length === 0 ? (
-                  <p className="text-xs text-slate-400">{t('noData')}</p>
-                ) : departments.map((department) => {
-                  const checked = selectedSignerDepartments.includes(department);
-                  return (
-                    <label
-                      key={department}
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium cursor-pointer border transition-colors ${
-                        checked
-                          ? 'bg-blue-600 text-white border-blue-600'
-                          : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        className="sr-only"
-                        checked={checked}
-                        onChange={() => toggleSignerDepartment(department)}
-                      />
-                      {department}
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-          )}
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">
-              {isEmployee ? t('departmentSigners') : 'Send for Signature'}
-            </label>
-            {isEmployee && selectedSignerDepartments.length === 0 ? (
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">{t('signerDepartments')}</label>
+            <div className="flex flex-wrap gap-2 p-3 border border-slate-200 rounded-xl max-h-32 overflow-y-auto">
+              {departmentsLoading ? (
+                <p className="text-xs text-slate-400">{t('loading')}</p>
+              ) : departments.length === 0 ? (
+                <p className="text-xs text-slate-400">{t('noData')}</p>
+              ) : departments.map((department) => {
+                const checked = selectedSignerDepartments.includes(department);
+                return (
+                  <label
+                    key={department}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium cursor-pointer border transition-colors ${
+                      checked
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="sr-only"
+                      checked={checked}
+                      onChange={() => toggleSignerDepartment(department)}
+                    />
+                    {department}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">{t('departmentSigners')}</label>
+            {selectedSignerDepartments.length === 0 ? (
               <p className="text-xs text-slate-400 px-3 py-2 border border-slate-200 rounded-xl">{t('selectSignerDepartmentsFirst')}</p>
             ) : (
               <div className="max-h-48 overflow-y-auto border border-slate-200 rounded-xl p-2 space-y-2">
                 {signersLoading ? (
                   <p className="text-xs text-slate-400 px-2 py-1">{t('loading')}</p>
-                ) : recipientList.length === 0 ? (
+                ) : departmentSigners.length === 0 ? (
                   <p className="text-xs text-slate-400 px-2 py-1">{t('noData')}</p>
-                ) : isEmployee ? (
+                ) : (
                   signersByDepartment.map(({ department, users }) =>
                     users.length === 0 ? null : (
                       <div key={department}>
@@ -345,33 +301,6 @@ function CreateDocModal({
                       </div>
                     )
                   )
-                ) : (
-                  recipientList.map((user) => {
-                    const checked = form.recipientIds.includes(user.id);
-                    const roleLabel = t(user.role as Parameters<typeof t>[0]);
-                    return (
-                      <label key={user.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setForm((prev) => ({ ...prev, recipientIds: [...prev.recipientIds, user.id] }));
-                            } else {
-                              setForm((prev) => ({ ...prev, recipientIds: prev.recipientIds.filter((id) => id !== user.id) }));
-                            }
-                            setLocalError('');
-                          }}
-                        />
-                        <span className="text-sm text-slate-700">{user.full_name}</span>
-                        <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ml-auto ${
-                          user.role === 'director' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'
-                        }`}>
-                          {roleLabel}
-                        </span>
-                      </label>
-                    );
-                  })
                 )}
               </div>
             )}
@@ -401,7 +330,7 @@ function CreateDocModal({
               {loading ? (
                 <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />{t('loading')}</>
               ) : (
-                <><Send size={14} />{isEmployee ? t('sendForApproval') : t('submitDocument')}</>
+                <><Send size={14} />{t('sendForApproval')}</>
               )}
             </button>
           </div>
@@ -810,7 +739,6 @@ export default function DocumentsPage() {
   const { t } = useLang();
   const { departmentNames, loading: departmentsLoading } = useDepartments(!!profile);
   const [docs, setDocs] = useState<Document[]>([]);
-  const [approvers, setApprovers] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -884,25 +812,6 @@ export default function DocumentsPage() {
     }
   };
 
-  useEffect(() => {
-    if (!profile || profile.role === 'employee') return;
-
-    (async () => {
-      try {
-        const allUsers = await getUsers();
-        const approvers = allUsers.filter((u) => {
-          if (u.id === profile.id) return false;
-          if (u.role === 'admin') return true;
-          if (u.role === 'director' && (!profile.department || u.department === profile.department)) return true;
-          return false;
-        });
-        setApprovers(approvers);
-      } catch {
-        setApprovers([]);
-      }
-    })();
-  }, [profile]);
-
   const handleStatusChange = async (docId: string, status: Document['status']) => {
     const updated = await updateDocumentStatus(docId, status);
     await load();
@@ -956,7 +865,6 @@ export default function DocumentsPage() {
     return matchSearch && matchStatus;
   });
 
-  const lockedDepartment = profile?.role === 'director' ? profile.department : '';
   const canCreateDocument = profile?.role !== 'admin';
 
   const getFileName = (doc: Document) => {
@@ -1178,10 +1086,8 @@ export default function DocumentsPage() {
           callerRole={profile?.role || 'employee'}
           profileId={profile?.id || ''}
           ownerDepartment={profile?.department || ''}
-          lockedDepartment={lockedDepartment}
           departments={departmentNames}
           departmentsLoading={departmentsLoading}
-          approvers={approvers}
         />
       )}
     </div>
